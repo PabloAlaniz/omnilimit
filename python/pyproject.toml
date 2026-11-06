@@ -69,7 +69,7 @@ exclude_also = ["if TYPE_CHECKING:", "\\.\\.\\.$"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src"]
+files = ["src", "typecheck"]
 
 [tool.ruff]
 target-version = "py311"

@@ -36,7 +36,9 @@ class RawHit:
 class Store(Protocol):
     """A blocking store. It must apply the hit atomically and use its own clock."""
 
-    tier: Tier
+    # Read-only, so a store may narrow it to the one tier it promises.
+    @property
+    def tier(self) -> Tier: ...
 
     def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit: ...
 
@@ -45,7 +47,8 @@ class Store(Protocol):
 class AsyncStore(Protocol):
     """Same contract as `Store`, for event loops."""
 
-    tier: Tier
+    @property
+    def tier(self) -> Tier: ...
 
     async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit: ...
 
