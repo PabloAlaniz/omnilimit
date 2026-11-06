@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/PabloAlaniz/omnilimit/compare/py-v0.1.0...py-v0.1.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **python:** let stores pass as Store under strict mypy ([#7](https://github.com/PabloAlaniz/omnilimit/issues/7)) ([7ea460a](https://github.com/PabloAlaniz/omnilimit/commit/7ea460a7673ed7e4a368b44fceafaa8c3645ecc9))
+
 ## 0.1.0 (2026-11-06)
 
 
