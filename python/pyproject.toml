@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "omnilimit"
+version = "0.1.0"
+description = "Rate limiting that behaves the same across stacks, with trusted client IPs and an explicit failure mode."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Pablo Alaniz" }]
+keywords = ["rate-limit", "rate-limiting", "gcra", "redis", "postgres", "fastapi", "x-forwarded-for"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+postgres = ["psycopg>=3.1"]
+fastapi = ["fastapi>=0.109"]
+
+[project.urls]
+Homepage = "https://github.com/PabloAlaniz/omnilimit"
+Repository = "https://github.com/PabloAlaniz/omnilimit"
+Specification = "https://github.com/PabloAlaniz/omnilimit/blob/main/spec/SPEC.md"
+
+[dependency-groups]
+dev = [
+    "coverage>=7.6",
+    "fastapi>=0.109",
+    "httpx>=0.27",
+    "jsonschema>=4.23",
+    "mypy>=1.13",
+    "psycopg[binary,pool]>=3.2",
+    "pytest>=8.3",
+    "redis>=5.0",
+    "ruff>=0.8",
+    "valkey>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/omnilimit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+branch = true
+source = ["omnilimit"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "\\.\\.\\.$"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["src/omnilimit/_generated.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "S603", "S607"]

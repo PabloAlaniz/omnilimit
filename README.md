@@ -5,7 +5,7 @@ Rate limiting that behaves the same across stacks, and proves it.
 [![CI](https://github.com/PabloAlaniz/omnilimit/actions/workflows/ci.yml/badge.svg)](https://github.com/PabloAlaniz/omnilimit/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Early release.** TypeScript is available. Python comes next, using the same spec and vectors.
+> **Early release.** Available for TypeScript and [Python](python/README.md), using the same spec and vectors.
 
 Most rate limiters cover one framework and leave you to get three things right on your own.
 `omnilimit` makes them part of the contract:
@@ -17,6 +17,7 @@ Most rate limiters cover one framework and leave you to get three things right o
 ## Install
 
 ```bash
+pip install omnilimit  # see python/README.md
 npm install omnilimit
 ```
 
@@ -108,7 +109,7 @@ It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) befor
 
 ## How it is verified
 
-Vectors come from a separate Python generator, so TypeScript is not validating itself. CI runs them on Node 20, 22 and 24, in real `workerd`, and against real Redis, Valkey and Postgres. It also injects realistic bugs and fails if the suite does not catch them. See the [conformance matrix](docs/matrix.md).
+Vectors come from a separate generator that shares no code with any port, so no port validates itself. CI runs them on Node 20, 22 and 24, Python 3.11 to 3.14, in real `workerd`, and against real Redis, Valkey and Postgres, where TypeScript and Python also share one counter. It also injects realistic bugs and fails if the suite does not catch them. See the [conformance matrix](docs/matrix.md).
 
 Other libraries may suit you better: see [how it compares](docs/compare.md).
 

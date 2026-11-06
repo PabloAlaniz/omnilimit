@@ -1,6 +1,6 @@
 # Conformance matrix
 
-CI runs these on every pull request, and the `ci-ok` check requires all of them. Spec version 1, TypeScript port.
+CI runs these on every pull request, and the `ci-ok` check requires all of them. Spec version 1, TypeScript and Python ports.
 
 | Environment | Store | `sequence` | `concurrency` | `failure` | `contract` | `key`, `ip` | Real clock |
 |---|---|---|---|---|---|---|---|
@@ -11,6 +11,13 @@ CI runs these on every pull request, and the `ci-ok` check requires all of them.
 | workerd | Memory | ✓ | | | | `ip` | |
 | workerd | Durable Objects | ✓ | ✓ | | | | ✓ |
 | workerd | Rate limit binding | | | | Real binding | | ✓ |
+
+| Python 3.11, 3.12, 3.13, 3.14 | Memory, sync and async | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Python 3.13 | Redis 7 (redis-py, valkey-py), sync and async | ✓ | ✓ | | | | ✓ |
+| Python 3.13 | Valkey 8 (redis-py, valkey-py), sync and async | ✓ | ✓ | | | | ✓ |
+| Python 3.13 | Postgres 15, 17 (psycopg 3), sync and async | ✓ | ✓ | | | | ✓ |
+
+TypeScript and Python also take turns on one counter in real Redis and Postgres, using sequence vectors. That proves they derive the same key and read each other's state.
 
 An empty cell means that kind does not exercise the store. For example, `failure` runs against simulated store faults at the limiter level.
 

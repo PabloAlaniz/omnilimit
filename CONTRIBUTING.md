@@ -4,7 +4,7 @@ Thanks for taking the time.
 
 ## Setup
 
-Requires Node 20+, pnpm, Python 3.10+ and Docker.
+Requires Node 20+, pnpm, Python 3.11+, uv and Docker.
 
 ```bash
 pnpm install
@@ -23,6 +23,16 @@ pnpm test:stores    # real Redis, Valkey and Postgres
 pnpm mutants        # injects bugs and fails if the suite misses one
 ```
 
+For Python, using [uv](https://docs.astral.sh/uv/) and the same exported URLs (written as `postgresql://` works too):
+
+```bash
+pnpm build                     # the cross-language test imports the built TypeScript
+cd python
+uv run pytest                  # add `coverage run -m` for the 95% floor
+uv run ruff check src tests && uv run mypy
+python3 ../tools/run_mutants_py.py
+```
+
 The store tests write random keys and may truncate `omnilimit_state`: only point them at throwaway databases.
 
 ## Changing behaviour
@@ -31,10 +41,10 @@ Behaviour lives in `spec/`, and ports follow it:
 
 1. Update `spec/SPEC.md`.
 2. Change the independent model in `tools/gen_vectors.py` and run it. Never edit `spec/vectors/` by hand.
-3. Run `tools/sync_assets.py` if you touched `spec/scripts/`, and never edit `ts/src/generated/` by hand.
+3. Run `tools/sync_assets.py` if you touched `spec/scripts/`, and never edit `ts/src/generated/` or `python/src/omnilimit/_generated.py` by hand.
 4. Update the port until the vectors pass.
 
-If you fix a bug the suite missed, add a vector, and a mutant to `tools/run_mutants.mjs` if it fits.
+If you fix a bug the suite missed, add a vector, and a mutant to `tools/run_mutants.mjs` or `tools/run_mutants_py.py` if it fits.
 
 ## Pull requests
 
