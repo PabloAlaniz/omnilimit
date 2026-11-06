@@ -1,6 +1,6 @@
 {
   "name": "omnilimit",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Rate limiting that behaves the same across stacks: verified by shared conformance vectors, with trusted client IPs and explicit store-failure modes.",
   "license": "MIT",
   "author": "Pablo Alaniz",
