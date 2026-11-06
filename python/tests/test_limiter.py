@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from omnilimit import AsyncLimiter, HitParams, Limiter, LimiterEvent, MemoryStor
 from omnilimit._gcra import resolve_policy
 from omnilimit._key import derive_key
 from omnilimit.ip import canonical_ip, mask_ip, resolve_client_ip
+from omnilimit.stores import memory
 
 BASE: dict[str, Any] = {"scope": "t", "limit": 2, "window_ms": 1000, "on_store_error": "closed"}
 
@@ -202,6 +204,22 @@ def test_memory_store_evicts_the_oldest_when_nothing_expired() -> None:
         store.hit(key, params, now_ms=1000)
     assert store.hit("a", params, now_ms=1000).allowed  # forgotten
     assert not store.hit("c", params, now_ms=1000).allowed  # still counted
+
+
+def test_memory_store_checks_and_writes_atomically(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pause between reading and writing a bucket, so a missing lock always shows up."""
+    real_apply_hit = memory.apply_hit
+
+    def slow_apply_hit(*args: Any) -> Any:
+        time.sleep(0.002)
+        return real_apply_hit(*args)
+
+    monkeypatch.setattr(memory, "apply_hit", slow_apply_hit)
+    params = HitParams(limit=1, window_ms=1000, capacity=5000, drain_ms=5000)
+    store = MemoryStore()
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        hits = list(pool.map(lambda _: store.hit("a", params, now_ms=1000), range(16)))
+    assert sum(hit.allowed for hit in hits) == 5
 
 
 def test_memory_store_counts_denials_as_no_write() -> None:

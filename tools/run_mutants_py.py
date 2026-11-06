@@ -138,19 +138,15 @@ STORES = [
     ),
 ]
 
-# "memory store races" needs threads to interleave, which the GIL makes rare without this.
 SUITE_TIMEOUT_S = 120
-RACE_ENV = {"OMNILIMIT_TEST_SWITCH_INTERVAL": "0.000001"}
 
 
-def fails(tests: list[str], extra_env: dict[str, str] | None = None) -> bool:
-    env = {**os.environ, **(extra_env or {})}
+def fails(tests: list[str]) -> bool:
     try:
         result = subprocess.run(  # noqa: S603
             # The venv's Python directly: a timeout must kill pytest itself, not just a uv parent.
             [str(ROOT / "python/.venv/bin/python"), "-m", "pytest", "-x", "-q", *tests],
             cwd=ROOT / "python",
-            env=env,
             capture_output=True,
             text=True,
             timeout=SUITE_TIMEOUT_S,
@@ -171,7 +167,7 @@ def run(mutants: list[tuple[str, str, str, str]], tests: list[str]) -> int:
             raise SystemExit(f'mutant "{name}" no longer applies to {file}')
         try:
             path.write_text(original.replace(before, after), encoding="utf-8")
-            killed = fails(tests, RACE_ENV)
+            killed = fails(tests)
         finally:
             path.write_text(original, encoding="utf-8")
         print(f"{'killed  ' if killed else 'SURVIVED'}  {name}", flush=True)
