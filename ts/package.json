@@ -1,6 +1,6 @@
 {
   "name": "omnilimit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Rate limiting that behaves the same across stacks: verified by shared conformance vectors, with trusted client IPs and explicit store-failure modes.",
   "license": "MIT",
   "author": "Pablo Alaniz",
@@ -10,7 +10,6 @@
     "directory": "ts"
   },
   "homepage": "https://github.com/PabloAlaniz/omnilimit#readme",
-  "bugs": "https://github.com/PabloAlaniz/omnilimit/issues",
   "bugs": "https://github.com/PabloAlaniz/omnilimit/issues",
   "keywords": [
     "rate-limit",
