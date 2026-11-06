@@ -1,0 +1,21 @@
+{
+ "spec": "1",
+ "id": "failure/error-open",
+ "kind": "failure",
+ "fault": "error",
+ "on_store_error": "open",
+ "policy": {
+  "limit": 5,
+  "window_ms": 60000,
+  "burst": 5
+ },
+ "expect": {
+  "allowed": true,
+  "reason": "store_error",
+  "status": null,
+  "remaining": null,
+  "reset_ms": null,
+  "retry_after_ms": null,
+  "headers": {}
+ }
+}

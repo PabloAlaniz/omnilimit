@@ -1,0 +1,192 @@
+{
+  "name": "omnilimit",
+  "version": "0.0.0",
+  "description": "Rate limiting that behaves the same across stacks: verified by shared conformance vectors, with trusted client IPs and explicit store-failure modes.",
+  "license": "MIT",
+  "author": "Pablo Alaniz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PabloAlaniz/omnilimit.git",
+    "directory": "ts"
+  },
+  "homepage": "https://github.com/PabloAlaniz/omnilimit#readme",
+  "bugs": "https://github.com/PabloAlaniz/omnilimit/issues",
+  "keywords": [
+    "rate-limit",
+    "rate-limiter",
+    "gcra",
+    "throttle",
+    "redis",
+    "postgres",
+    "hono",
+    "express",
+    "nextjs",
+    "cloudflare-workers",
+    "x-forwarded-for"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./ip": {
+      "import": {
+        "types": "./dist/ip.d.ts",
+        "default": "./dist/ip.js"
+      },
+      "require": {
+        "types": "./dist/ip.d.cts",
+        "default": "./dist/ip.cjs"
+      }
+    },
+    "./redis": {
+      "import": {
+        "types": "./dist/redis.d.ts",
+        "default": "./dist/redis.js"
+      },
+      "require": {
+        "types": "./dist/redis.d.cts",
+        "default": "./dist/redis.cjs"
+      }
+    },
+    "./postgres": {
+      "import": {
+        "types": "./dist/postgres.d.ts",
+        "default": "./dist/postgres.js"
+      },
+      "require": {
+        "types": "./dist/postgres.d.cts",
+        "default": "./dist/postgres.cjs"
+      }
+    },
+    "./cloudflare": {
+      "import": {
+        "types": "./dist/cloudflare.d.ts",
+        "default": "./dist/cloudflare.js"
+      },
+      "require": {
+        "types": "./dist/cloudflare.d.cts",
+        "default": "./dist/cloudflare.cjs"
+      }
+    },
+    "./cloudflare/do": {
+      "import": {
+        "types": "./dist/cloudflare-do.d.ts",
+        "default": "./dist/cloudflare-do.js"
+      },
+      "require": {
+        "types": "./dist/cloudflare-do.d.cts",
+        "default": "./dist/cloudflare-do.cjs"
+      }
+    },
+    "./hono": {
+      "import": {
+        "types": "./dist/hono.d.ts",
+        "default": "./dist/hono.js"
+      },
+      "require": {
+        "types": "./dist/hono.d.cts",
+        "default": "./dist/hono.cjs"
+      }
+    },
+    "./next": {
+      "import": {
+        "types": "./dist/next.d.ts",
+        "default": "./dist/next.js"
+      },
+      "require": {
+        "types": "./dist/next.d.cts",
+        "default": "./dist/next.cjs"
+      }
+    },
+    "./express": {
+      "import": {
+        "types": "./dist/express.d.ts",
+        "default": "./dist/express.js"
+      },
+      "require": {
+        "types": "./dist/express.d.cts",
+        "default": "./dist/express.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "ip": [
+        "dist/ip.d.ts"
+      ],
+      "redis": [
+        "dist/redis.d.ts"
+      ],
+      "postgres": [
+        "dist/postgres.d.ts"
+      ],
+      "cloudflare": [
+        "dist/cloudflare.d.ts"
+      ],
+      "cloudflare/do": [
+        "dist/cloudflare-do.d.ts"
+      ],
+      "hono": [
+        "dist/hono.d.ts"
+      ],
+      "next": [
+        "dist/next.d.ts"
+      ],
+      "express": [
+        "dist/express.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run test/core",
+    "test:stores": "vitest run test/stores",
+    "test:adapters": "vitest run test/adapters",
+    "test:workerd": "pnpm build && vitest run test/workerd",
+    "coverage": "vitest run test/core test/adapters --coverage",
+    "check:package": "pnpm build && publint --strict && attw --pack . --profile node16",
+    "prepack": "cp ../README.md ./README.md && cp ../LICENSE ./LICENSE && pnpm build",
+    "postpack": "rm -f README.md LICENSE"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.0",
+    "@vitest/coverage-v8": "^5.1.0",
+    "ajv": "^8.20.0",
+    "esbuild": "^0.28.2",
+    "express": "^5.3.0",
+    "hono": "^4.13.16",
+    "ioredis": "^6.0.0",
+    "miniflare": "^4.20260730.0",
+    "pg": "^8.23.1",
+    "publint": "^0.3.25",
+    "redis": "^6.3.1",
+    "tsup": "^9.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.1.0"
+  }
+}

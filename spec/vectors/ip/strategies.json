@@ -1,0 +1,404 @@
+{
+ "spec": "1",
+ "id": "ip/strategies",
+ "kind": "ip",
+ "cases": [
+  {
+   "name": "rightmost-with-zero-hops",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "spoofed-left-values-are-ignored",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 7.7.7.7, 203.0.113.7, 198.51.100.2"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 1
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "chain-shorter-than-hops-is-null",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 1
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "chain-equal-to-hops-is-null",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7, 198.51.100.2"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 2
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "missing-header-is-null",
+   "headers": {},
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "empty-header-is-null",
+   "headers": {
+    "x-forwarded-for": ""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "garbage-is-null",
+   "headers": {
+    "x-forwarded-for": "not-an-ip"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "garbage-in-trusted-position-is-null",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7, junk"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "empty-entry-is-null",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7, "
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "ipv4-leading-zero-is-null",
+   "headers": {
+    "x-forwarded-for": "010.0.0.1"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "ipv4-with-port-is-null",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7:443"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "ipv4-out-of-range-is-null",
+   "headers": {
+    "x-forwarded-for": "256.0.0.1"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "ipv6-is-canonicalised",
+   "headers": {
+    "x-forwarded-for": "2001:0DB8:0000:0000:0000:0000:0000:0001"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "2001:db8::1"
+  },
+  {
+   "name": "ipv6-compresses-longest-run",
+   "headers": {
+    "x-forwarded-for": "2001:db8:0:0:1:0:0:1"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "2001:db8::1:0:0:1"
+  },
+  {
+   "name": "ipv6-compresses-first-of-equal-runs",
+   "headers": {
+    "x-forwarded-for": "2001:0:0:1:0:0:1:1"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "2001::1:0:0:1:1"
+  },
+  {
+   "name": "ipv6-single-zero-not-compressed",
+   "headers": {
+    "x-forwarded-for": "2001:db8:0:1:1:1:1:1"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "2001:db8:0:1:1:1:1:1"
+  },
+  {
+   "name": "ipv4-mapped-becomes-ipv4",
+   "headers": {
+    "x-forwarded-for": "::ffff:203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "ipv4-mapped-hex-becomes-ipv4",
+   "headers": {
+    "x-forwarded-for": "::ffff:cb00:7107"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "ipv6-zone-is-null",
+   "headers": {
+    "x-forwarded-for": "fe80::1%eth0"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "ipv6-unspecified",
+   "headers": {
+    "x-forwarded-for": "::"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "::"
+  },
+  {
+   "name": "ipv6-trailing-ipv4",
+   "headers": {
+    "x-forwarded-for": "64:ff9b::192.0.2.33"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "64:ff9b::c000:221"
+  },
+  {
+   "name": "cloudflare-reads-its-header",
+   "headers": {
+    "cf-connecting-ip": "203.0.113.7",
+    "x-forwarded-for": "6.6.6.6"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "preset": "cloudflare"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "cloudflare-without-header-is-null",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "preset": "cloudflare"
+   },
+   "expect": null
+  },
+  {
+   "name": "cloudflare-with-list-is-null",
+   "headers": {
+    "cf-connecting-ip": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "preset": "cloudflare"
+   },
+   "expect": null
+  },
+  {
+   "name": "cloud-run-takes-rightmost",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": "169.254.1.1",
+   "strategy": {
+    "preset": "cloud-run"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "cloud-run-lb-skips-the-balancer",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7, 198.51.100.2"
+   },
+   "peer": "169.254.1.1",
+   "strategy": {
+    "preset": "cloud-run-lb"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "vercel-reads-its-header",
+   "headers": {
+    "x-vercel-forwarded-for": "203.0.113.7",
+    "x-forwarded-for": "6.6.6.6"
+   },
+   "peer": null,
+   "strategy": {
+    "preset": "vercel"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "direct-uses-peer-and-ignores-xff",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6"
+   },
+   "peer": "203.0.113.7",
+   "strategy": {
+    "preset": "direct"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "direct-canonicalises-mapped-peer",
+   "headers": {},
+   "peer": "::ffff:203.0.113.7",
+   "strategy": {
+    "preset": "direct"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "direct-without-peer-is-null",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6"
+   },
+   "peer": null,
+   "strategy": {
+    "preset": "direct"
+   },
+   "expect": null
+  }
+ ],
+ "masks": [
+  {
+   "ip": "2001:db8:1:2:3:4:5:6",
+   "prefix": 64,
+   "expect": "2001:db8:1:2::"
+  },
+  {
+   "ip": "2001:db8:1:2:3:4:5:6",
+   "prefix": 48,
+   "expect": "2001:db8:1::"
+  },
+  {
+   "ip": "2001:db8:1:2:3:4:5:6",
+   "prefix": 128,
+   "expect": "2001:db8:1:2:3:4:5:6"
+  },
+  {
+   "ip": "2001:db8:1:2:ffff::",
+   "prefix": 57,
+   "expect": "2001:db8:1::"
+  },
+  {
+   "ip": "203.0.113.7",
+   "prefix": 64,
+   "expect": "203.0.113.7"
+  }
+ ]
+}

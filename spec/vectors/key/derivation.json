@@ -1,0 +1,84 @@
+{
+ "spec": "1",
+ "id": "key/derivation",
+ "kind": "key",
+ "cases": [
+  {
+   "scope": "login",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "salt": "pepper",
+   "id": "203.0.113.7",
+   "expect": "ol:1:login:5-60000-2:82fed9dd0c81474b0e9487ef231e81b4"
+  },
+  {
+   "scope": "api.v1",
+   "policy": {
+    "limit": 100,
+    "window_ms": 1000,
+    "burst": 100
+   },
+   "salt": "",
+   "id": "user-1",
+   "expect": "ol:1:api.v1:100-1000-100:019ba1ca038842f8597c056ca07e51bb"
+  },
+  {
+   "scope": "a_b-c",
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "salt": "ñandú",
+   "id": "josé@example.com",
+   "expect": "ol:1:a_b-c:1-1000-1:f5bd8047f00cb86c04ae2c42367bf628"
+  },
+  {
+   "scope": "t",
+   "policy": {
+    "limit": 3,
+    "window_ms": 1000,
+    "burst": 3
+   },
+   "salt": "s",
+   "id": "",
+   "expect": "ol:1:t:3-1000-3:28a3d6d537e5d5090d33c042ad97db20"
+  },
+  {
+   "scope": "t",
+   "policy": {
+    "limit": 3,
+    "window_ms": 1000,
+    "burst": 3
+   },
+   "salt": "a\u0000b",
+   "id": "c",
+   "expect": "ol:1:t:3-1000-3:8badde10c760e9b702defb4b5e225de7"
+  },
+  {
+   "scope": "t",
+   "policy": {
+    "limit": 3,
+    "window_ms": 1000,
+    "burst": 3
+   },
+   "salt": "a",
+   "id": "\u0000bc",
+   "expect": "ol:1:t:3-1000-3:71329c10b1d4148d7d26bf425e009dd4"
+  },
+  {
+   "scope": "t",
+   "policy": {
+    "limit": 3,
+    "window_ms": 1000,
+    "burst": 3
+   },
+   "salt": "s",
+   "id": "🦙",
+   "expect": "ol:1:t:3-1000-3:a7ce8b1a831dafd10e7d4ed77b281d66"
+  }
+ ]
+}

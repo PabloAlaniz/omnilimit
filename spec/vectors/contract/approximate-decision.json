@@ -1,0 +1,42 @@
+{
+ "spec": "1",
+ "id": "contract/approximate-decision",
+ "kind": "contract",
+ "subject": "approximate",
+ "policy": {
+  "limit": 5,
+  "window_ms": 60000,
+  "burst": 5
+ },
+ "period_sec": 60,
+ "cases": [
+  {
+   "store_allows": true,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": null,
+    "reset_ms": null,
+    "retry_after_ms": null,
+    "headers": {},
+    "tier": "approximate"
+   }
+  },
+  {
+   "store_allows": false,
+   "expect": {
+    "allowed": false,
+    "reason": "limited",
+    "status": 429,
+    "remaining": null,
+    "reset_ms": null,
+    "retry_after_ms": 60000,
+    "headers": {
+     "retry-after": "60"
+    },
+    "tier": "approximate"
+   }
+  }
+ ]
+}

@@ -1,0 +1,8 @@
+site_name: omnilimit
+repo_url: https://github.com/PabloAlaniz/omnilimit
+nav:
+  - Home: index.md
+  - Stores: stores.md
+  - Client IP: client-ip.md
+  - Conformance matrix: matrix.md
+  - How it compares: compare.md

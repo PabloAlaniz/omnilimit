@@ -1,0 +1,36 @@
+{
+ "spec": "1",
+ "id": "contract/scope-validation",
+ "kind": "contract",
+ "subject": "scope",
+ "cases": [
+  {
+   "scope": "login",
+   "valid": true
+  },
+  {
+   "scope": "api.v1_x-y",
+   "valid": true
+  },
+  {
+   "scope": "",
+   "valid": false
+  },
+  {
+   "scope": "a:b",
+   "valid": false
+  },
+  {
+   "scope": "a\"b",
+   "valid": false
+  },
+  {
+   "scope": "a b",
+   "valid": false
+  },
+  {
+   "scope": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "valid": false
+  }
+ ]
+}
