@@ -126,10 +126,83 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm mutants
 
+  python-core:
+    name: python core (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    defaults:
+      run: { working-directory: python }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x", enable-cache: true, python-version: "${{ matrix.python }}" }
+      - run: uv sync --locked
+      - run: uv run ruff format --check src tests
+      - run: uv run ruff check src tests
+      - run: uv run mypy
+      - run: uv run pytest tests/test_conformance.py tests/test_limiter.py tests/test_fastapi.py
+
+  python-stores:
+    name: python stores and cross-language
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services: *services
+    env:
+      OMNILIMIT_REQUIRE_STORES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@9bbca1e9dc2902adb87e8780fe5c98796985a62d # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24", cache: pnpm }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x", enable-cache: true, python-version: "3.13" }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: uv sync --locked
+        working-directory: python
+      # The whole suite, so coverage includes the stores.
+      - run: uv run coverage run -m pytest
+        working-directory: python
+      - run: uv run coverage report
+        working-directory: python
+
+  python-package:
+    name: python package (clean wheel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x", python-version: "3.13" }
+      - run: uv build --out-dir dist
+        working-directory: python
+      - run: python3 tools/smoke_wheel.py python/dist
+
+  python-mutants:
+    name: python mutants (the suite can fail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services: *services
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x", enable-cache: true, python-version: "3.13" }
+      - run: uv sync --locked
+        working-directory: python
+      - run: python3 tools/run_mutants_py.py
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [spec, core, stores, workerd, package, mutants]
+    needs: [spec, core, stores, workerd, package, mutants, python-core, python-stores, python-package, python-mutants]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

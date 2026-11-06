@@ -9,6 +9,20 @@
       "package-name": "omnilimit",
       "changelog-path": "CHANGELOG.md",
       "initial-version": "0.1.0"
+    },
+    "python": {
+      "release-type": "python",
+      "component": "py",
+      "package-name": "omnilimit",
+      "changelog-path": "CHANGELOG.md",
+      "initial-version": "0.1.0",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='omnilimit')].version"
+        }
+      ]
     }
   }
 }
