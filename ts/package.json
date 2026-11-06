@@ -11,6 +11,7 @@
   },
   "homepage": "https://github.com/PabloAlaniz/omnilimit#readme",
   "bugs": "https://github.com/PabloAlaniz/omnilimit/issues",
+  "bugs": "https://github.com/PabloAlaniz/omnilimit/issues",
   "keywords": [
     "rate-limit",
     "rate-limiter",
