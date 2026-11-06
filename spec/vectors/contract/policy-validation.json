@@ -1,0 +1,88 @@
+{
+ "spec": "1",
+ "id": "contract/policy-validation",
+ "kind": "contract",
+ "subject": "policy",
+ "cases": [
+  {
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "valid": true
+  },
+  {
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "valid": true
+  },
+  {
+   "policy": {
+    "limit": 52124995,
+    "window_ms": 86400000,
+    "burst": 52124995
+   },
+   "valid": true
+  },
+  {
+   "policy": {
+    "limit": 52125995,
+    "window_ms": 86400000,
+    "burst": 52125995
+   },
+   "valid": false
+  },
+  {
+   "policy": {
+    "limit": 0,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "valid": false
+  },
+  {
+   "policy": {
+    "limit": 1,
+    "window_ms": 999,
+    "burst": 1
+   },
+   "valid": false
+  },
+  {
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000,
+    "burst": 0
+   },
+   "valid": false
+  },
+  {
+   "policy": {
+    "limit": 1.5,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "valid": false
+  },
+  {
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000.5,
+    "burst": 1
+   },
+   "valid": false
+  },
+  {
+   "policy": {
+    "limit": -1,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "valid": false
+  }
+ ]
+}

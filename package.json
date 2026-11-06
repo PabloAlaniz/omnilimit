@@ -1,0 +1,15 @@
+{
+  "name": "omnilimit-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.34.9",
+  "scripts": {
+    "build": "pnpm --filter omnilimit build",
+    "typecheck": "pnpm --filter omnilimit typecheck",
+    "test": "pnpm --filter omnilimit test",
+    "test:stores": "pnpm --filter omnilimit test:stores",
+    "test:workerd": "pnpm --filter omnilimit test:workerd",
+    "check:package": "pnpm --filter omnilimit check:package",
+    "mutants": "node tools/run_mutants.mjs",
+    "check:spec": "python3 tools/gen_vectors.py --check && python3 tools/sync_assets.py --check"
+  }
+}

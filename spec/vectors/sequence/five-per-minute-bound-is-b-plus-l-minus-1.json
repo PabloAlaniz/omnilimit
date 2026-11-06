@@ -1,0 +1,317 @@
+{
+ "spec": "1",
+ "id": "sequence/five-per-minute-bound-is-b-plus-l-minus-1",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 5,
+  "window_ms": 60000,
+  "burst": 5
+ },
+ "scope": "t",
+ "salt": "s",
+ "steps": [
+  {
+   "at_ms": 1700000000000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 4,
+    "reset_ms": 12000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 60000,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=4;t=12"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "4",
+      "x-ratelimit-reset": "12"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000006000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 3,
+    "reset_ms": 18000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 90000,
+     "ts": 1700000006000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=3;t=18"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "3",
+      "x-ratelimit-reset": "18"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000012000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 3,
+    "reset_ms": 24000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 120000,
+     "ts": 1700000012000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=3;t=24"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "3",
+      "x-ratelimit-reset": "24"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000018000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 2,
+    "reset_ms": 30000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 150000,
+     "ts": 1700000018000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=2;t=30"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "2",
+      "x-ratelimit-reset": "30"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000024000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 2,
+    "reset_ms": 36000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 180000,
+     "ts": 1700000024000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=2;t=36"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "2",
+      "x-ratelimit-reset": "36"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000030000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 42000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 210000,
+     "ts": 1700000030000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=1;t=42"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "42"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000036000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 48000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 240000,
+     "ts": 1700000036000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=1;t=48"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "48"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000042000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 54000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 270000,
+     "ts": 1700000042000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=0;t=6"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "6"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000048000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 300000,
+     "ts": 1700000048000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=0;t=12"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "12"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000054000,
+   "id": "a",
+   "expect": {
+    "allowed": false,
+    "reason": "limited",
+    "status": 429,
+    "remaining": 0,
+    "reset_ms": 54000,
+    "retry_after_ms": 6000,
+    "state": {
+     "level": 270000,
+     "ts": 1700000048000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=0;t=6",
+      "retry-after": "6"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "6",
+      "retry-after": "6"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000060000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 300000,
+     "ts": 1700000060000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=60",
+      "ratelimit": "\"t\";r=0;t=12"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "12"
+     }
+    }
+   }
+  }
+ ]
+}

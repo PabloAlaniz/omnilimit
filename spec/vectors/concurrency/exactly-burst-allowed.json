@@ -1,0 +1,19 @@
+{
+ "spec": "1",
+ "id": "concurrency/exactly-burst-allowed",
+ "kind": "concurrency",
+ "tiers": [
+  "exact"
+ ],
+ "policy": {
+  "limit": 10,
+  "window_ms": 60000,
+  "burst": 25
+ },
+ "scope": "c",
+ "salt": "s",
+ "id_value": "a",
+ "hits": 200,
+ "at_ms": 1700000000000,
+ "expect_allowed": 25
+}

@@ -1,0 +1,16 @@
+# Throwaway databases for `pnpm test:stores`. Ports bind to localhost only.
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:56379:6379"]
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports: ["127.0.0.1:56380:6379"]
+  postgres15:
+    image: postgres:15-alpine
+    environment: { POSTGRES_PASSWORD: omnilimit, POSTGRES_DB: omnilimit }
+    ports: ["127.0.0.1:55415:5432"]
+  postgres17:
+    image: postgres:17-alpine
+    environment: { POSTGRES_PASSWORD: omnilimit, POSTGRES_DB: omnilimit }
+    ports: ["127.0.0.1:55417:5432"]

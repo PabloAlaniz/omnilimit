@@ -1,0 +1,23 @@
+{
+ "spec": "1",
+ "id": "failure/error-closed",
+ "kind": "failure",
+ "fault": "error",
+ "on_store_error": "closed",
+ "policy": {
+  "limit": 5,
+  "window_ms": 60000,
+  "burst": 5
+ },
+ "expect": {
+  "allowed": false,
+  "reason": "store_error",
+  "status": 503,
+  "remaining": null,
+  "reset_ms": null,
+  "retry_after_ms": 1000,
+  "headers": {
+   "retry-after": "1"
+  }
+ }
+}

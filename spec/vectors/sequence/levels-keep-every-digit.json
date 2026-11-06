@@ -1,0 +1,128 @@
+{
+ "spec": "1",
+ "id": "sequence/levels-keep-every-digit",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 1,
+  "window_ms": 123456789012345,
+  "burst": 3
+ },
+ "scope": "t",
+ "salt": "s",
+ "steps": [
+  {
+   "at_ms": 1700000000000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 2,
+    "reset_ms": 123456789012345,
+    "retry_after_ms": null,
+    "state": {
+     "level": 123456789012345,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=123456789013",
+      "ratelimit": "\"t\";r=2;t=123456789013"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "2",
+      "x-ratelimit-reset": "123456789013"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 246913578024690,
+    "retry_after_ms": null,
+    "state": {
+     "level": 246913578024690,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=123456789013",
+      "ratelimit": "\"t\";r=1;t=246913578025"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "246913578025"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000001,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 370370367037034,
+    "retry_after_ms": null,
+    "state": {
+     "level": 370370367037034,
+     "ts": 1700000000001
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=123456789013",
+      "ratelimit": "\"t\";r=0;t=123456789013"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "123456789013"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000001,
+   "id": "a",
+   "expect": {
+    "allowed": false,
+    "reason": "limited",
+    "status": 429,
+    "remaining": 0,
+    "reset_ms": 370370367037034,
+    "retry_after_ms": 123456789012344,
+    "state": {
+     "level": 370370367037034,
+     "ts": 1700000000001
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=123456789013",
+      "ratelimit": "\"t\";r=0;t=123456789013",
+      "retry-after": "123456789013"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "123456789013",
+      "retry-after": "123456789013"
+     }
+    }
+   }
+  }
+ ]
+}
