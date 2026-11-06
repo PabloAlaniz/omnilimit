@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.1.0...ts-v0.1.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ts:** publish the current README and a bugs link ([#9](https://github.com/PabloAlaniz/omnilimit/issues/9)) ([8848234](https://github.com/PabloAlaniz/omnilimit/commit/8848234d49c0c09ea3fd09494d18ad30f4d2452e))
+
 ## 0.1.0 (2026-11-06)
 
 
