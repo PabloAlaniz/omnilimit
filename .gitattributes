@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# The SHA-1 of hit.lua is part of the EVALSHA contract: its bytes must never change on checkout.
+spec/scripts/** text eol=lf
