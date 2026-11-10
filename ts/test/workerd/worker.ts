@@ -12,7 +12,7 @@ interface Env {
 }
 
 interface Body {
-  op: 'sequence' | 'concurrency' | 'binding' | 'ip' | 'real-clock';
+  op: 'sequence' | 'concurrency' | 'mixed-concurrency' | 'binding' | 'ip' | 'real-clock' | 'real-reset';
   store?: 'memory' | 'do';
   [name: string]: unknown;
 }
