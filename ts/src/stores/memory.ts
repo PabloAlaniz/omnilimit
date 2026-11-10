@@ -1,4 +1,4 @@
-import { applyHit, type MeterState } from '../core/gcra.js';
+import { applyHit, applyPeek, type MeterState } from '../core/gcra.js';
 import type { HitParams, RawHit, Store } from '../core/types.js';
 
 export interface MemoryStoreOptions {
@@ -34,6 +34,13 @@ export function memoryStore(options: MemoryStoreOptions = {}): Store {
         evict(entries, maxKeys, now);
       }
       return hit;
+    },
+    async peek(key: string, params: HitParams, nowMs?: number): Promise<RawHit> {
+      // Reading does not refresh recency: only counted requests keep a bucket alive.
+      return applyPeek(entries.get(key) ?? null, params, nowMs ?? Date.now());
+    },
+    async reset(key: string): Promise<void> {
+      entries.delete(key);
     },
   };
 }

@@ -60,12 +60,40 @@ import { ipKey, withRateLimit } from 'omnilimit/next';
 export const POST = withRateLimit(handler, { limiter, key: ipKey({ preset: 'vercel' }), onMissingKey: 'shared' });
 ```
 
+To answer in your own error format, pass `onDenied`. It gets the status, headers and decision, and in Hono it may throw so your `app.onError` handles it:
+
+```ts
+app.post('/login', rateLimit({
+  limiter: login,
+  key: ipKey({ preset: 'cloudflare' }),
+  onMissingKey: 'shared',
+  onDenied: (denial) => { throw new ApiError(denial.status, denial.error); },
+}));
+```
+
 Anywhere else, call the limiter yourself:
 
 ```ts
 const decision = await limiter.check(userId);
 if (!decision.allowed) { /* use decision.status and decision.headers */ }
 ```
+
+### Count only failures
+
+`peek` answers without counting and `reset` forgets a bucket, so a limit can count failed attempts only, as a login lockout does:
+
+```ts
+const id = `${email}:${ip}`;
+const gate = await failedLogins.peek(id);
+if (!gate.allowed) return tooManyAttempts(gate);   // refuse even a correct password
+if (await passwordMatches()) {
+  await failedLogins.reset(id);                    // success clears the slate
+} else {
+  await failedLogins.check(id);                    // only failures count
+}
+```
+
+`peek` is advisory: a concurrent request can take the last unit, so the `check` that follows stays the authority. Both need an `exact` or `local` store.
 
 ## Pick a store
 
@@ -103,7 +131,7 @@ It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) befor
 ## Good to know
 
 - **It limits a rate, not a fixed window count.** `limit: 5` per minute with `burst: 5` can admit 9 requests within one minute. Use a lower `burst` for sensitive routes.
-- **It is not a lockout.** Blocking an account after failed logins is a separate feature.
+- **A lockout is built from `peek`, `check` and `reset`,** as shown above. There is no separate ban list or escalating penalty.
 - **A timed-out store call may still have counted.** The store could finish the hit after the timeout.
 - **Run your CORS middleware first,** or browsers will hide the `429` from your frontend.
 
@@ -111,7 +139,7 @@ It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) befor
 
 Vectors come from a separate generator that shares no code with any port, so no port validates itself. CI runs them on Node 20, 22 and 24, Python 3.11 to 3.14, in real `workerd`, and against real Redis, Valkey and Postgres, where TypeScript and Python also share one counter. It also injects realistic bugs and fails if the suite does not catch them. See the [conformance matrix](docs/matrix.md).
 
-Other libraries may suit you better: see [how it compares](docs/compare.md).
+Other libraries may suit you better: see [how it compares](docs/compare.md) and the [roadmap](docs/roadmap.md).
 
 ## License
 

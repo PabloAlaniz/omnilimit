@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 from omnilimit._gcra import assert_scope, resolve_policy, view_of
 from omnilimit._headers import build_headers
@@ -22,6 +22,7 @@ from omnilimit._types import (
     HeaderOption,
     LimiterEvent,
     OnStoreError,
+    Op,
     RawHit,
     Store,
     Tier,
@@ -30,6 +31,16 @@ from omnilimit._types import (
 _DEFAULT_STORE_TIMEOUT_MS = 1000
 _DEFAULT_MAX_STORE_THREADS = 32
 _STORE_ERROR_RETRY_MS = 1000
+
+_T = TypeVar("_T")
+
+
+def _store_method(store: Any, op: Literal["peek", "reset"]) -> Any:
+    """The store's optional method, or a `TypeError`: a missing one is a configuration error."""
+    method = getattr(store, op, None)
+    if not callable(method):
+        raise TypeError(f"omnilimit: this store does not support {op}")
+    return method
 
 
 class _Core:
@@ -84,8 +95,9 @@ class _Core:
         built = self.headers(data) if callable(self.headers) else build_headers(self.headers, data)
         return replace(decision, headers=built)
 
-    def from_hit(self, hit: RawHit) -> Decision:
-        self._emit(LimiterEvent("allowed" if hit.allowed else "limited", self.scope, self.tier))
+    def from_hit(self, hit: RawHit, op: Op = "check") -> Decision:
+        event_type: Literal["allowed", "limited"] = "allowed" if hit.allowed else "limited"
+        self._emit(LimiterEvent(event_type, self.scope, self.tier, op=op))
         base = Decision(
             allowed=hit.allowed,
             reason="ok" if hit.allowed else "limited",
@@ -111,8 +123,8 @@ class _Core:
         )
         return self._finish(decision, view.effective_ms)
 
-    def from_failure(self, error: Exception) -> Decision:
-        self._emit(LimiterEvent("store_error", self.scope, self.tier, error))
+    def from_failure(self, error: Exception, op: Op = "check") -> Decision:
+        self.report_failure(error, op)
         # Reports nothing about quota: the store could not say anything about it.
         allowed = self.on_store_error == "open"
         decision = Decision(
@@ -126,10 +138,16 @@ class _Core:
         )
         return self._finish(decision, 0)
 
+    def report_failure(self, error: Exception, op: Op) -> None:
+        self._emit(LimiterEvent("store_error", self.scope, self.tier, error, op=op))
+
+    def report_reset(self) -> None:
+        self._emit(LimiterEvent("reset", self.scope, self.tier, op="reset"))
+
 
 def _run_with_timeout(
-    call: Callable[[], RawHit], timeout_s: float, slots: threading.BoundedSemaphore
-) -> RawHit:
+    call: Callable[[], _T], timeout_s: float, slots: threading.BoundedSemaphore
+) -> _T:
     """Run a blocking call, giving up after `timeout_s`.
 
     Python cannot abandon a blocking call, so it runs in its own daemon thread: if it hangs,
@@ -140,7 +158,7 @@ def _run_with_timeout(
     if not slots.acquire(timeout=timeout_s):
         raise TimeoutError("omnilimit: too many store calls in flight")
 
-    outcome: list[RawHit | Exception] = []
+    outcome: list[_T | Exception] = []
     finished = threading.Event()
 
     def work() -> None:
@@ -214,24 +232,51 @@ class Limiter:
     def tier(self) -> Tier:
         return self._core.tier
 
+    def _call(self, call: Callable[[], _T]) -> _T:
+        # A local store has no I/O, so it cannot hang and does not need a thread.
+        if self._core.tier == "local":
+            return call()
+        return _run_with_timeout(call, self._core.timeout_s, self._slots)
+
+    def _decide(self, op: Op, call: Callable[[], RawHit]) -> Decision:
+        try:
+            hit = self._call(call)
+        except Exception as error:
+            return self._core.from_failure(error, op)
+        return self._core.from_hit(hit, op)
+
     def check(self, id_value: str, *, now_ms: int | None = None) -> Decision:
         """Count one request for `id_value`. `now_ms` exists for conformance vectors only."""
-        core = self._core
-        key = core.key(id_value)
+        key = self._core.key(id_value)
+        return self._decide("check", lambda: self._store.hit(key, self._core.policy, now_ms))
 
-        def call() -> RawHit:
-            return self._store.hit(key, core.policy, now_ms)
+    def peek(self, id_value: str, *, now_ms: int | None = None) -> Decision:
+        """The decision `check` would give now, without counting.
 
+        When allowed, `remaining` includes the request asked about. It is advisory: a concurrent
+        request can take the last unit, so the `check` that follows is still the authority.
+        Raises `TypeError` if the store cannot peek; store failures follow `on_store_error`.
+        """
+        peek = _store_method(self._store, "peek")
+        key = self._core.key(id_value)
+        return self._decide("peek", lambda: peek(key, self._core.policy, now_ms))
+
+    def reset(self, id_value: str) -> bool:
+        """Forget everything counted for `id_value`.
+
+        Returns `True` once deleted (also when there was nothing to delete) and `False` if the
+        store failed or timed out, which is reported through `on_event`; it never raises for a
+        store failure. Raises `TypeError` if the store cannot reset.
+        """
+        reset = _store_method(self._store, "reset")
+        key = self._core.key(id_value)
         try:
-            # A local store has no I/O, so it cannot hang and does not need a thread.
-            hit = (
-                call()
-                if core.tier == "local"
-                else _run_with_timeout(call, core.timeout_s, self._slots)
-            )
+            self._call(lambda: reset(key))
         except Exception as error:
-            return core.from_failure(error)
-        return core.from_hit(hit)
+            self._core.report_failure(error, "reset")
+            return False
+        self._core.report_reset()
+        return True
 
 
 class AsyncLimiter:
@@ -275,17 +320,38 @@ class AsyncLimiter:
     def tier(self) -> Tier:
         return self._core.tier
 
+    async def _call(self, call: Callable[[], Any]) -> Any:
+        result = call()
+        if inspect.isawaitable(result):
+            return await asyncio.wait_for(result, self._core.timeout_s)
+        return result
+
+    async def _decide(self, op: Op, call: Callable[[], Any]) -> Decision:
+        try:
+            hit: RawHit = await self._call(call)
+        except Exception as error:
+            return self._core.from_failure(error, op)
+        return self._core.from_hit(hit, op)
+
     async def check(self, id_value: str, *, now_ms: int | None = None) -> Decision:
         """Count one request for `id_value`. `now_ms` exists for conformance vectors only."""
-        core = self._core
-        key = core.key(id_value)
+        key = self._core.key(id_value)
+        return await self._decide("check", lambda: self._store.hit(key, self._core.policy, now_ms))
+
+    async def peek(self, id_value: str, *, now_ms: int | None = None) -> Decision:
+        """The decision `check` would give now, without counting. See `Limiter.peek`."""
+        peek = _store_method(self._store, "peek")
+        key = self._core.key(id_value)
+        return await self._decide("peek", lambda: peek(key, self._core.policy, now_ms))
+
+    async def reset(self, id_value: str) -> bool:
+        """Forget everything counted for `id_value`. See `Limiter.reset`."""
+        reset = _store_method(self._store, "reset")
+        key = self._core.key(id_value)
         try:
-            result = self._store.hit(key, core.policy, now_ms)
-            hit: RawHit = (
-                await asyncio.wait_for(result, core.timeout_s)
-                if inspect.isawaitable(result)
-                else result
-            )
+            await self._call(lambda: reset(key))
         except Exception as error:
-            return core.from_failure(error)
-        return core.from_hit(hit)
+            self._core.report_failure(error, "reset")
+            return False
+        self._core.report_reset()
+        return True

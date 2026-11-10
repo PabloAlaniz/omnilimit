@@ -1,8 +1,18 @@
-import { evaluate, ipKey, type IpKeyOptions, type KeyContext, type KeyFn, type MissingKeyPolicy, type Outcome } from './shared.js';
+import {
+  defaultDenialResponse,
+  evaluate,
+  ipKey,
+  toDenial,
+  type Denial,
+  type IpKeyOptions,
+  type KeyContext,
+  type KeyFn,
+  type MissingKeyPolicy,
+} from './shared.js';
 import type { Limiter } from '../core/types.js';
 
 export { ipKey };
-export type { IpKeyOptions, KeyContext, KeyFn, MissingKeyPolicy };
+export type { Denial, IpKeyOptions, KeyContext, KeyFn, MissingKeyPolicy };
 
 export interface NextKeyContext extends KeyContext {
   request: Request;
@@ -12,13 +22,11 @@ export interface NextRateLimitOptions {
   limiter: Limiter;
   key: KeyFn<NextKeyContext>;
   onMissingKey: MissingKeyPolicy;
-}
-
-function denyResponse(outcome: Extract<Outcome, { kind: 'deny' }>): Response {
-  return new Response(JSON.stringify(outcome.body), {
-    status: outcome.status,
-    headers: { 'content-type': 'application/json', ...outcome.headers },
-  });
+  /**
+   * Build the response for a denied request, for example in your API's error format. Pass
+   * `denial.headers` on so clients still see `Retry-After`. Defaults to `{"error": "..."}` as JSON.
+   */
+  onDenied?: (denial: Denial, request: Request) => Response | Promise<Response>;
 }
 
 /**
@@ -30,7 +38,10 @@ export async function checkRateLimit(
   options: NextRateLimitOptions,
 ): Promise<{ denied: Response; headers?: undefined } | { denied?: undefined; headers: Record<string, string> }> {
   const outcome = await evaluate(options, { headers: request.headers, peer: null, request });
-  if (outcome.kind === 'deny') return { denied: denyResponse(outcome) };
+  if (outcome.kind === 'deny') {
+    const denial = toDenial(outcome);
+    return { denied: options.onDenied ? await options.onDenied(denial, request) : defaultDenialResponse(denial) };
+  }
   return { headers: outcome.headers };
 }
 

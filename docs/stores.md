@@ -8,7 +8,7 @@ const store = redisStore(fromIoredis(client));   // ioredis
 const store = redisStore(fromNodeRedis(client)); // node-redis
 ```
 
-The store runs one Lua script per hit, using `EVALSHA` and loading the script on `NOSCRIPT`. It uses the Redis server clock and sets a TTL so idle buckets disappear.
+The store runs one Lua script per hit, using `EVALSHA` and loading the script on `NOSCRIPT`. It uses the Redis server clock and sets a TTL so idle buckets disappear. `peek` runs a second, read-only script, and `reset` is a `DEL`, so a hand-written `RedisEval` needs `del` for it.
 
 Other Redis-compatible services work if they support `EVALSHA`, `TIME` inside scripts and `PEXPIRE`, but only Redis and Valkey are in the test matrix. To connect another client, implement `RedisEval`.
 
@@ -19,7 +19,7 @@ import { MIGRATION_SQL, postgresStore } from 'omnilimit/postgres';
 const store = postgresStore(pool); // any object with query(sql, params), such as a pg Pool
 ```
 
-1. Apply `MIGRATION_SQL` once with your migration tool. omnilimit never runs it for you, and it is safe to reapply.
+1. Apply `MIGRATION_SQL` once with your migration tool. omnilimit never runs it for you, and it is safe to reapply. Upgrading from 0.1, reapply it to add `omnilimit_peek_v1`, which `peek` needs.
 2. Schedule `store.cleanup()`, which deletes expired buckets in batches.
 
 Each hit takes a row lock and writes a row, so busy buckets contend and create dead tuples. It is exact, and convenient when Postgres is already there, but it has not been benchmarked: use Redis for high traffic.
@@ -41,7 +41,7 @@ const store = durableObjectStore(env.RATE_LIMITER);
 }
 ```
 
-There is one object per bucket, and an alarm deletes its storage after it drains. Requests incur Durable Object billing.
+There is one object per bucket, and an alarm deletes its storage after it drains. `reset` deletes the storage and the alarm. Requests incur Durable Object billing, and every check, peek and reset is one round trip to the object.
 
 ## Cloudflare rate limit binding
 
@@ -56,6 +56,7 @@ Cloudflare enforces its own configured limit per location and only reports allow
 - `periodSec` must be 10 or 60.
 - Decisions have `remaining: null` and `resetMs: null`, and only send `Retry-After`.
 - A missing binding is a store failure, handled by `onStoreError`. It does not silently allow traffic.
+- `peek` and `reset` are not available: the binding cannot answer them.
 
 ## Memory
 

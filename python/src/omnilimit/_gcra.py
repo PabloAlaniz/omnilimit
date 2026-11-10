@@ -78,6 +78,20 @@ def apply_hit(
     return RawHit(allowed=True, level=new_level, ts=t), MeterState(level=new_level, ts=t)
 
 
+def apply_peek(state: MeterState | None, params: HitParams, now_ms: int) -> RawHit:
+    """The answer `apply_hit` would give now, without a state to write.
+
+    `level` is the drained level before the hit and `ts` the stored timestamp, or `now_ms`
+    when there is no bucket.
+    """
+    ts = state.ts if state is not None else now_ms
+    level = state.level if state is not None else 0
+    t = max(now_ms, ts)
+    elapsed = min(t - ts, params.drain_ms)
+    drained = max(0, level - elapsed * params.limit)
+    return RawHit(allowed=drained + params.window_ms <= params.capacity, level=drained, ts=ts)
+
+
 @dataclass(frozen=True, slots=True)
 class MeterView:
     remaining: int

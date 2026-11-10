@@ -40,9 +40,18 @@ export function ipKey(options: IpKeyOptions): KeyFn {
 
 const SHARED_ID = '__omnilimit_shared__';
 
-export type Outcome =
-  | { kind: 'pass'; headers: Record<string, string> }
-  | { kind: 'deny'; status: number; headers: Record<string, string>; body: { error: string } };
+/** Why a request was turned away, handed to `onDenied` so the app can answer in its own format. */
+export interface Denial {
+  /** 429 when limited, 503 when the store failed closed, 400 when the client could not be identified. */
+  status: number;
+  /** Headers to send, including `Retry-After` when there is one. */
+  headers: Record<string, string>;
+  error: 'rate_limited' | 'rate_limiter_unavailable' | 'client_not_identified';
+  /** The limiter's decision, or `null` when no check ran (`client_not_identified`). */
+  decision: Decision | null;
+}
+
+export type Outcome = { kind: 'pass'; headers: Record<string, string> } | ({ kind: 'deny' } & Denial);
 
 export async function evaluate<C extends KeyContext>(options: RateLimitOptions<C>, context: C): Promise<Outcome> {
   const { limiter, key, onMissingKey } = options;
@@ -50,7 +59,7 @@ export async function evaluate<C extends KeyContext>(options: RateLimitOptions<C
   if (id === null) {
     if (onMissingKey === 'skip') return { kind: 'pass', headers: {} };
     if (onMissingKey === 'reject') {
-      return { kind: 'deny', status: 400, headers: {}, body: { error: 'client_not_identified' } };
+      return { kind: 'deny', status: 400, headers: {}, error: 'client_not_identified', decision: null };
     }
     return toOutcome(await limiter.check(SHARED_ID));
   }
@@ -60,5 +69,18 @@ export async function evaluate<C extends KeyContext>(options: RateLimitOptions<C
 function toOutcome(decision: Decision): Outcome {
   if (decision.allowed) return { kind: 'pass', headers: decision.headers };
   const error = decision.reason === 'store_error' ? 'rate_limiter_unavailable' : 'rate_limited';
-  return { kind: 'deny', status: decision.status ?? 429, headers: decision.headers, body: { error } };
+  return { kind: 'deny', status: decision.status ?? 429, headers: decision.headers, error, decision };
+}
+
+/** The default denial response: `{"error": "..."}` as JSON with the decision's headers. */
+export function defaultDenialResponse(denial: Denial): Response {
+  return new Response(JSON.stringify({ error: denial.error }), {
+    status: denial.status,
+    headers: { 'content-type': 'application/json', ...denial.headers },
+  });
+}
+
+export function toDenial(outcome: Extract<Outcome, { kind: 'deny' }>): Denial {
+  const { status, headers, error, decision } = outcome;
+  return { status, headers, error, decision };
 }

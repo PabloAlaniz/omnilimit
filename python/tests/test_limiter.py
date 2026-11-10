@@ -293,3 +293,142 @@ class TestClientIp:
     def test_mask_prefix_is_validated(self, prefix: Any) -> None:
         with pytest.raises(ValueError, match="prefix"):
             mask_ip("2001:db8::1", prefix)
+
+
+class TestPeekAndReset:
+    def test_peek_does_not_consume(self) -> None:
+        limiter = Limiter(**{**BASE, "limit": 1}, store=MemoryStore())
+        for _ in range(3):
+            peeked = limiter.peek("a", now_ms=1000)
+            assert (peeked.allowed, peeked.remaining, peeked.reason) == (True, 1, "ok")
+        assert limiter.check("a", now_ms=1000).allowed
+        denied = limiter.peek("a", now_ms=1000)
+        assert (denied.allowed, denied.status, denied.retry_after_ms) == (False, 429, 1000)
+        assert denied.headers["retry-after"] == "1"
+
+    def test_peek_on_memory_writes_nothing_and_keeps_the_eviction_order(self) -> None:
+        params = HitParams(limit=1, window_ms=1000, capacity=1000, drain_ms=1000)
+        store = MemoryStore(max_keys=2)
+        store.hit("a", params, now_ms=1000)
+        store.hit("b", params, now_ms=1000)
+        assert store.peek("missing", params, now_ms=1000) == RawHit(True, 0, 1000)
+        assert store.peek("a", params, now_ms=1500) == RawHit(False, 500, 1000)
+        store.hit("c", params, now_ms=1000)
+        # "a" stayed the oldest: a peek is not a use.
+        assert store.hit("a", params, now_ms=1000).allowed
+        assert not store.hit("c", params, now_ms=1000).allowed
+
+    def test_reset_forgets_only_its_id(self) -> None:
+        events: list[LimiterEvent] = []
+        limiter = Limiter(**{**BASE, "limit": 1}, store=MemoryStore(), on_event=events.append)
+        assert limiter.check("a", now_ms=1000).allowed
+        assert limiter.check("b", now_ms=1000).allowed
+        assert limiter.reset("a") is True
+        assert limiter.reset("never-seen") is True
+        assert limiter.check("a", now_ms=1000).allowed
+        assert not limiter.check("b", now_ms=1000).allowed
+        assert events[2] == LimiterEvent("reset", "t", "local", op="reset")
+
+    def test_events_say_which_operation_they_come_from(self) -> None:
+        events: list[LimiterEvent] = []
+        limiter = Limiter(**{**BASE, "limit": 1}, store=MemoryStore(), on_event=events.append)
+        limiter.check("a", now_ms=1000)
+        limiter.peek("a", now_ms=1000)
+        limiter.reset("a")
+        assert [(e.type, e.op) for e in events] == [
+            ("allowed", "check"),
+            ("limited", "peek"),
+            ("reset", "reset"),
+        ]
+
+    def test_a_store_without_peek_or_reset_is_a_configuration_error(self) -> None:
+        events: list[LimiterEvent] = []
+        limiter = Limiter(**BASE, store=Blocking(), on_event=events.append)
+        with pytest.raises(TypeError, match="does not support peek"):
+            limiter.peek("a")
+        with pytest.raises(TypeError, match="does not support reset"):
+            limiter.reset("a")
+        async_limiter = AsyncLimiter(**BASE, store=AsyncOk())
+        with pytest.raises(TypeError, match="does not support peek"):
+            asyncio.run(async_limiter.peek("a"))
+        with pytest.raises(TypeError, match="does not support reset"):
+            asyncio.run(async_limiter.reset("a"))
+        assert events == []
+
+    def test_peek_failure_follows_on_store_error(self) -> None:
+        events: list[LimiterEvent] = []
+        boom = ConnectionError("down")
+
+        class Failing(Blocking):
+            def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+                raise boom
+
+        for mode, status in (("closed", 503), ("open", None)):
+            limiter = Limiter(
+                **{**BASE, "on_store_error": mode}, store=Failing(), on_event=events.append
+            )
+            decision = limiter.peek("a")
+            assert (decision.reason, decision.status) == ("store_error", status)
+        assert [(e.type, e.op, e.error) for e in events] == [("store_error", "peek", boom)] * 2
+
+    def test_reset_with_a_failing_store_returns_false_and_reports_it(self) -> None:
+        events: list[LimiterEvent] = []
+        boom = ConnectionError("down")
+
+        class Failing(Blocking):
+            def reset(self, key: str) -> None:
+                raise boom
+
+        limiter = Limiter(**BASE, store=Failing(), on_event=events.append)
+        assert limiter.reset("a") is False
+        assert [(e.type, e.op, e.error) for e in events] == [("store_error", "reset", boom)]
+
+    def test_reset_with_a_hung_store_times_out_to_false(self) -> None:
+        events: list[LimiterEvent] = []
+        release = threading.Event()
+
+        class Hanging(Blocking):
+            def reset(self, key: str) -> None:
+                release.wait(5)
+
+        limiter = Limiter(**BASE, store=Hanging(), store_timeout_ms=20, on_event=events.append)
+        try:
+            assert limiter.reset("a") is False
+        finally:
+            release.set()
+        assert events[0].type == "store_error"
+        assert isinstance(events[0].error, TimeoutError)
+
+    def test_async_peek_and_reset(self) -> None:
+        events: list[LimiterEvent] = []
+        reset_keys: list[str] = []
+
+        class Async(AsyncOk):
+            async def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+                return RawHit(allowed=True, level=0, ts=0)
+
+            async def reset(self, key: str) -> None:
+                reset_keys.append(key)
+
+        limiter = AsyncLimiter(**BASE, store=Async(), on_event=events.append)
+        assert asyncio.run(limiter.peek("a")).remaining == 2
+        assert asyncio.run(limiter.reset("a")) is True
+        assert len(reset_keys) == 1
+        assert [(e.type, e.op) for e in events] == [("allowed", "peek"), ("reset", "reset")]
+
+    def test_async_reset_failure_and_timeout(self) -> None:
+        events: list[LimiterEvent] = []
+
+        class Broken(AsyncOk):
+            async def reset(self, key: str) -> None:
+                raise ConnectionError("down")
+
+        class Hung(AsyncOk):
+            async def reset(self, key: str) -> None:
+                await asyncio.sleep(3600)
+
+        for store in (Broken(), Hung()):
+            limiter = AsyncLimiter(**BASE, store=store, store_timeout_ms=20, on_event=events.append)
+            assert asyncio.run(limiter.reset("a")) is False
+        assert [(e.type, e.op) for e in events] == [("store_error", "reset")] * 2
+        assert isinstance(events[1].error, TimeoutError)

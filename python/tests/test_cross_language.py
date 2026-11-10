@@ -29,10 +29,13 @@ REDIS_URLS = [u for u in os.environ.get("OMNILIMIT_TEST_REDIS_URLS", "").split("
 POSTGRES_URLS = [u for u in os.environ.get("OMNILIMIT_TEST_POSTGRES_URLS", "").split(",") if u]
 
 # Enough to reach drain, denial, and clock regression, without one Node start per vector step.
+# Only hits: `tools/cross_lang.mjs` drives `check` alone.
 VECTORS = [
     vector
     for vector in vectors_of("sequence")
-    if "exact" in vector["tiers"] and 3 <= len(vector["steps"]) <= 12
+    if "exact" in vector["tiers"]
+    and 3 <= len(vector["steps"]) <= 12
+    and all("op" not in step for step in vector["steps"])
 ][:12]
 
 

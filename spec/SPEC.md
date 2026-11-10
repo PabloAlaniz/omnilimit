@@ -41,6 +41,35 @@ retry_after_ms = ceil((lvl + W - C) / L)     denied only
 **Peak rate.** This is a rate, not a counter that resets. `5` per minute with burst 5 can admit
 `B + L - 1 = 9` requests in one minute. If you need fewer, lower `burst`.
 
+## Peek and reset
+
+Two operations sit next to the hit. They change nothing above, and stores of tier `exact` and
+`local` must support both. An `approximate` store cannot, and the limiter raises a type error
+(a configuration mistake, not a store failure) when asked.
+
+**Peek** returns the decision a hit would get now, and never writes:
+
+```text
+t     = max(now, ts)
+lvl   = max(0, level - min(t - ts, drain) * L)
+allowed = lvl + W <= C;    level reported = lvl;    ts reported = stored ts (now if absent)
+```
+
+The public values use the formulas above with `level = lvl`. When allowed, `remaining` therefore
+counts the request being asked about, and the effective window is `reset_ms`. A denied peek
+equals a denied hit. A peek is advisory: a concurrent hit can take the last unit, so the hit that
+follows is still the authority. It neither extends a bucket's expiry nor refreshes its recency.
+
+**Reset** deletes the bucket. The next hit or peek behaves as if it never existed. Resetting a
+missing bucket is not an error. A reset that fails or times out is reported as such, and does
+not follow `open`/`closed`: no request is being decided.
+
+Together they express a limit that counts only failures, such as a login lockout: peek before
+the work and refuse when denied, hit when the work fails, reset when it succeeds.
+
+Sequence vectors mark these steps with `op: "peek"` or `op: "reset"`; a step without `op` is a
+hit. Reset steps have no `expect`.
+
 ## State format 1
 
 Key: `ol:1:<scope>:<L>-<W>-<B>:<hash>`, where `hash` is the first 32 hex characters of
@@ -50,6 +79,9 @@ Key: `ol:1:<scope>:<L>-<W>-<B>:<hash>`, where `hash` is the first 32 hex charact
 - The policy is part of the key, because levels are measured in units of `W`. Changing a limit
   starts a new counter rather than misreading the old one.
 - `scope` matches `^[A-Za-z0-9._-]{1,64}$`.
+
+Peek uses `spec/scripts/redis/peek.lua` and `omnilimit_peek_v1` (`spec/scripts/postgres/002_peek.sql`,
+which takes no lock). Reset is `DEL` in Redis and `DELETE` in Postgres.
 
 | Store | Layout | Clock |
 |---|---|---|

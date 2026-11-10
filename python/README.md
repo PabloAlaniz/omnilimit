@@ -35,6 +35,15 @@ if not decision.allowed:
 
 `5` per minute with burst 5 can admit 9 requests in one minute: this is a rate, not a counter that resets. Lower `burst` if you need fewer.
 
+## Peek and reset
+
+```python
+decision = limiter.peek(user_id)  # what check() would answer now, without counting
+limiter.reset(user_id)  # forget the bucket, e.g. after a successful login
+```
+
+`peek` builds its decision like `check` and follows `on_store_error` the same way. When allowed, `remaining` includes the request you asked about. It is advisory: a concurrent request can take the last unit, so the `check` that follows is still the authority. `reset` returns `True` once the bucket is gone (or was never there) and `False` if the store failed or timed out, which `on_event` reports; it never raises for a store failure. Both raise `TypeError` if the store cannot do them, which is a configuration error. Every event carries `op` (`"check"`, `"peek"` or `"reset"`), and a successful reset emits type `"reset"`.
+
 ## Sync or async
 
 | Code | Limiter | Stores |
@@ -64,6 +73,24 @@ app = FastAPI(dependencies=[
 
 Denials raise `HTTPException`, so your own handlers format them. Headers on allowed requests are not added when a route returns its own `Response` object, as a file download usually does.
 
+To build the denial response yourself, pass `on_denied` and register its handler. It receives a `Denial` with `status`, `headers`, `error` (`"rate_limited"`, `"rate_limiter_unavailable"` or `"client_not_identified"`) and `decision` (`None` for a missing key):
+
+```python
+from fastapi.responses import JSONResponse
+
+from omnilimit.fastapi import RateLimitDenied, denied_handler
+
+
+def on_denied(request, denial):
+    return JSONResponse({"error": denial.error}, status_code=denial.status, headers=denial.headers)
+
+
+app.add_exception_handler(RateLimitDenied, denied_handler)  # without it, a denial raises TypeError
+limit = Depends(rate_limit(limiter, key=..., on_missing_key="reject", on_denied=on_denied))
+```
+
+With an `AsyncLimiter`, `on_denied` may be `async`.
+
 ## Client IP only
 
 `omnilimit.ip` uses only the standard library and also works next to `slowapi`:
@@ -78,4 +105,4 @@ It returns `None` rather than guessing. Check that the preset matches your deplo
 
 ## Postgres
 
-`omnilimit.stores.postgres.MIGRATION_SQL` creates the table and functions: apply it with your migration tool. Stores take a psycopg 3 pool or a connection with `autocommit=True`. Each hit is a write, so it is not meant for high traffic, and `cleanup()` is yours to schedule.
+`omnilimit.stores.postgres.MIGRATION_SQL` creates the table and functions: apply it with your migration tool. Stores take a psycopg 3 pool or a connection with `autocommit=True`. Each hit is a write, so it is not meant for high traffic, and `cleanup()` is yours to schedule. `MIGRATION_SQL` is idempotent: apply it again after upgrading, since `peek` needs `omnilimit_peek_v1`.

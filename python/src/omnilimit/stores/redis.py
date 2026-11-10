@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from omnilimit._generated import REDIS_HIT_LUA, REDIS_HIT_SHA1
+from omnilimit._generated import REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_LUA, REDIS_PEEK_SHA1
 from omnilimit._types import HitParams, RawHit
 
 
@@ -47,15 +47,24 @@ class RedisStore:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
-        args = _args(params, now_ms)
+    def _run(self, sha1: str, lua: str, key: str, args: list[str]) -> RawHit:
         try:
-            reply = self._client.evalsha(REDIS_HIT_SHA1, 1, key, *args)
+            reply = self._client.evalsha(sha1, 1, key, *args)
         except Exception as error:
             if not _is_no_script(error):
                 raise
-            reply = self._client.eval(REDIS_HIT_LUA, 1, key, *args)
+            reply = self._client.eval(lua, 1, key, *args)
         return _parse(reply)
+
+    def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        return self._run(REDIS_HIT_SHA1, REDIS_HIT_LUA, key, _args(params, now_ms))
+
+    def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        """What `hit` would answer now, read only."""
+        return self._run(REDIS_PEEK_SHA1, REDIS_PEEK_LUA, key, _args(params, now_ms))
+
+    def reset(self, key: str) -> None:
+        self._client.delete(key)
 
 
 class AsyncRedisStore:
@@ -66,12 +75,21 @@ class AsyncRedisStore:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
-        args = _args(params, now_ms)
+    async def _run(self, sha1: str, lua: str, key: str, args: list[str]) -> RawHit:
         try:
-            reply = await self._client.evalsha(REDIS_HIT_SHA1, 1, key, *args)
+            reply = await self._client.evalsha(sha1, 1, key, *args)
         except Exception as error:
             if not _is_no_script(error):
                 raise
-            reply = await self._client.eval(REDIS_HIT_LUA, 1, key, *args)
+            reply = await self._client.eval(lua, 1, key, *args)
         return _parse(reply)
+
+    async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        return await self._run(REDIS_HIT_SHA1, REDIS_HIT_LUA, key, _args(params, now_ms))
+
+    async def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        """What `hit` would answer now, read only."""
+        return await self._run(REDIS_PEEK_SHA1, REDIS_PEEK_LUA, key, _args(params, now_ms))
+
+    async def reset(self, key: str) -> None:
+        await self._client.delete(key)

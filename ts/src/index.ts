@@ -9,6 +9,7 @@ export type {
   HitParams,
   Limiter,
   LimiterEvent,
+  LimiterOp,
   LimiterOptions,
   Policy,
   RawHit,

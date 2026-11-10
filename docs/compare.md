@@ -13,6 +13,6 @@ Pick the tool that fits. These notes come from each project's public documentati
 
 Pick omnilimit when you want one behaviour across frameworks and stores, verified on every commit, with client IP handling and store failure as part of the contract.
 
-It has a narrower scope on purpose. It has one algorithm, and no quotas per plan, weighted costs, or lockouts.
+It has a narrower scope on purpose. It has one algorithm, and no quotas per plan or weighted costs. Lockouts that count only failures are built from `peek`, `check` and `reset`; there is no ban list or escalating penalty. See the [roadmap](roadmap.md) for what may come next.
 
 `omnilimit/ip` is independent, so you can use it with any of the libraries above.

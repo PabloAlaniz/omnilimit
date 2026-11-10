@@ -42,6 +42,10 @@ afterAll(async () => {
 
 function compare(vector: Vector, decisions: Vector[]): void {
   decisions.forEach((d, index) => {
+    if (vector.steps[index].op === 'reset') {
+      expect(d, `${vector.id} step ${index}`).toEqual({ reset: true });
+      return;
+    }
     const want = vector.steps[index].expect;
     expect(
       { allowed: d.allowed, reason: d.reason, status: d.status, remaining: d.remaining, reset_ms: d.resetMs, retry_after_ms: d.retryAfterMs, headers: d.headers },
@@ -74,6 +78,21 @@ describe('workerd', () => {
       const result = await call({ op: 'concurrency', store: 'do', ...vector, salt: randomUUID() });
       expect(result).toEqual({ allowed: vector.expect_allowed, errors: 0 });
     }
+  });
+
+  it('durable object: peeks racing with hits never take quota', async () => {
+    for (const vector of vectorsOf('concurrency')) {
+      const result = await call({ op: 'mixed-concurrency', store: 'do', ...vector, hits: vector.hits * 2, salt: randomUUID() });
+      expect(result).toEqual({ allowed: vector.expect_allowed, errors: 0 });
+    }
+  });
+
+  it('durable object: reset with the real clock clears the bucket and its alarm', async () => {
+    const result = await call({ op: 'real-reset', store: 'do', salt: randomUUID() });
+    expect(result.first.allowed).toBe(true);
+    expect(result.denied.reason).toBe('limited');
+    expect(result.reset).toBe(true);
+    expect(result.after.allowed).toBe(true);
   });
 
   it('durable object: smoke with the real clock', async () => {

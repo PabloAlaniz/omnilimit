@@ -5,12 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastapi import Depends, FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.testclient import TestClient
 
 from omnilimit import AsyncLimiter, HitParams, Limiter, MemoryStore, RawHit
-from omnilimit.fastapi import KeyContext, ip_key, rate_limit
+from omnilimit.fastapi import (
+    Denial,
+    KeyContext,
+    RateLimitDenied,
+    denied_handler,
+    ip_key,
+    rate_limit,
+)
 
 POLICY: dict[str, Any] = {"scope": "t", "limit": 1, "window_ms": 60_000, "on_store_error": "closed"}
 
@@ -156,3 +163,105 @@ def test_a_returned_response_is_limited_but_carries_no_headers() -> None:
     assert response.status_code == 200
     assert "ratelimit" not in response.headers
     assert client.get("/raw").status_code == 429
+
+
+def _custom_app(limiter: Any, on_denied: Any, *, handler: bool = True, **kwargs: Any) -> TestClient:
+    app = FastAPI(
+        dependencies=[
+            Depends(rate_limit(limiter, on_missing_key="reject", on_denied=on_denied, **kwargs))
+        ]
+    )
+    if handler:
+        app.add_exception_handler(RateLimitDenied, denied_handler)
+
+    @app.get("/")
+    def root() -> dict[str, bool]:
+        return {"ok": True}
+
+    return TestClient(app)
+
+
+@both
+def test_on_denied_builds_the_response(limiter: Any) -> None:
+    seen: list[Denial] = []
+
+    def on_denied(request: Request, denial: Denial) -> Response:
+        seen.append(denial)
+        return JSONResponse(
+            {"error": denial.error, "path": request.url.path},
+            status_code=denial.status,
+            headers=denial.headers,
+        )
+
+    client = _custom_app(_fresh(limiter), on_denied, key=lambda _: "x")
+    assert client.get("/").status_code == 200
+    denied = client.get("/")
+    assert denied.status_code == 429
+    assert denied.json() == {"error": "rate_limited", "path": "/"}
+    assert 0 < int(denied.headers["retry-after"]) <= 60
+    assert seen[0].decision is not None
+    assert seen[0].decision.reason == "limited"
+
+
+def test_on_denied_may_be_async_with_an_async_limiter() -> None:
+    async def on_denied(request: Request, denial: Denial) -> Response:
+        return PlainTextResponse("slow down", status_code=418)
+
+    limiter = AsyncLimiter(**POLICY, store=MemoryStore())
+    client = _custom_app(limiter, on_denied, key=lambda _: "x")
+    assert client.get("/").status_code == 200
+    denied = client.get("/")
+    assert (denied.status_code, denied.text) == (418, "slow down")
+
+
+def test_an_async_on_denied_needs_an_async_limiter() -> None:
+    async def on_denied(request: Request, denial: Denial) -> Response:
+        return PlainTextResponse("x")
+
+    limiter = Limiter(**{**POLICY, "limit": 1}, store=MemoryStore())
+    client = _custom_app(limiter, on_denied, key=lambda _: "x")
+    client.get("/")
+    with pytest.raises(TypeError, match="async on_denied"):
+        client.get("/")
+
+
+@both
+def test_on_denied_sees_store_failures_and_missing_keys(limiter: Any) -> None:
+    seen: list[Denial] = []
+
+    def on_denied(request: Request, denial: Denial) -> Response:
+        seen.append(denial)
+        return PlainTextResponse(denial.error, status_code=denial.status, headers=denial.headers)
+
+    class Failing:
+        tier = "exact"
+
+        def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            raise ConnectionError("down")
+
+    class AsyncFailing:
+        tier = "exact"
+
+        async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            raise ConnectionError("down")
+
+    store = AsyncFailing() if isinstance(limiter, AsyncLimiter) else Failing()
+    failing = type(limiter)(**POLICY, store=store)
+    response = _custom_app(failing, on_denied, key=lambda _: "x").get("/")
+    assert (response.status_code, response.text) == (503, "rate_limiter_unavailable")
+    assert response.headers["retry-after"] == "1"
+
+    missing = _custom_app(_fresh(limiter), on_denied, key=lambda _: None).get("/")
+    assert (missing.status_code, missing.text) == (400, "client_not_identified")
+    assert seen[-1] == Denial(status=400, headers={}, error="client_not_identified", decision=None)
+
+
+@both
+def test_on_denied_without_the_handler_fails_loudly(limiter: Any) -> None:
+    def on_denied(request: Request, denial: Denial) -> Response:
+        return PlainTextResponse("x")
+
+    client = _custom_app(_fresh(limiter), on_denied, handler=False, key=lambda _: "x")
+    assert client.get("/").status_code == 200
+    with pytest.raises(TypeError, match="denied_handler"):
+        client.get("/")

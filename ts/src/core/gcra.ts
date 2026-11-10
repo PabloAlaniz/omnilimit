@@ -65,6 +65,15 @@ export function applyHit(state: MeterState | null, params: HitParams, nowMs: num
   return { hit: { allowed: true, level: next, ts: t }, write: { level: next, ts: t } };
 }
 
+/** The decision `applyHit` would give, reporting the drained level. Never writes. */
+export function applyPeek(state: MeterState | null, params: HitParams, nowMs: number): RawHit & { level: number; ts: number } {
+  const ts = state?.ts ?? nowMs;
+  const level = state?.level ?? 0;
+  const t = Math.max(nowMs, ts);
+  const drained = Math.max(0, level - Math.min(t - ts, params.drainMs) * params.limit);
+  return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };
+}
+
 export interface MeterView {
   remaining: number;
   resetMs: number;

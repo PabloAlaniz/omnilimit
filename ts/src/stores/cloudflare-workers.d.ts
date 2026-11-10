@@ -7,6 +7,7 @@ declare module 'cloudflare:workers' {
         put<T>(key: string, value: T): Promise<void>;
         deleteAll(): Promise<void>;
         setAlarm(scheduledTime: number): Promise<void>;
+        deleteAlarm(): Promise<void>;
       };
     };
     constructor(ctx: unknown, env: unknown);

@@ -84,20 +84,46 @@ export function createLimiter(options: LimiterOptions): Limiter {
     );
   };
 
+  const decide = async (op: 'check' | 'peek', run: () => Promise<RawHit>): Promise<Decision> => {
+    let hit: RawHit;
+    try {
+      hit = await withTimeout(run(), storeTimeoutMs);
+    } catch (error) {
+      emit({ type: 'store_error', op, scope, tier: store.tier, error });
+      return fromFailure();
+    }
+    emit({ type: hit.allowed ? 'allowed' : 'limited', op, scope, tier: store.tier });
+    return fromHit(hit);
+  };
+
+  const unsupported = (op: 'peek' | 'reset') =>
+    new TypeError(`omnilimit: this store (tier ${store.tier}) does not support ${op}`);
+
   return {
     scope,
     tier: store.tier,
     async check(id, checkOptions) {
       const key = await deriveKey(scope, policy, salt, id);
-      let hit: RawHit;
+      return decide('check', () => store.hit(key, policy, checkOptions?.nowMs));
+    },
+    async peek(id, peekOptions) {
+      const peekFn = store.peek?.bind(store);
+      if (!peekFn) throw unsupported('peek');
+      const key = await deriveKey(scope, policy, salt, id);
+      return decide('peek', () => peekFn(key, policy, peekOptions?.nowMs));
+    },
+    async reset(id) {
+      const resetFn = store.reset?.bind(store);
+      if (!resetFn) throw unsupported('reset');
+      const key = await deriveKey(scope, policy, salt, id);
       try {
-        hit = await withTimeout(store.hit(key, policy, checkOptions?.nowMs), storeTimeoutMs);
+        await withTimeout(resetFn(key), storeTimeoutMs);
       } catch (error) {
-        emit({ type: 'store_error', scope, tier: store.tier, error });
-        return fromFailure();
+        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });
+        return false;
       }
-      emit({ type: hit.allowed ? 'allowed' : 'limited', scope, tier: store.tier });
-      return fromHit(hit);
+      emit({ type: 'reset', op: 'reset', scope, tier: store.tier });
+      return true;
     },
   };
 }

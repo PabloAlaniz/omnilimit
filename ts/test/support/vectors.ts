@@ -42,6 +42,11 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
       lastRaw = await store.hit(key, params, nowMs);
       return lastRaw;
     },
+    async peek(key: string, params: HitParams, nowMs?: number) {
+      lastRaw = await store.peek!(key, params, nowMs);
+      return lastRaw;
+    },
+    reset: (key: string) => store.reset!(key),
   };
   let profiles: Record<string, Record<string, string>> = {};
   const limiter = createLimiter({
@@ -57,8 +62,15 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
     },
   });
   for (const [index, step] of vector.steps.entries()) {
-    const decision = await limiter.check(step.id, { nowMs: step.at_ms });
     const context = `${vector.id} step ${index}`;
+    if (step.op === 'reset') {
+      expect(await limiter.reset(step.id), context).toBe(true);
+      continue;
+    }
+    const decision =
+      step.op === 'peek'
+        ? await limiter.peek(step.id, { nowMs: step.at_ms })
+        : await limiter.check(step.id, { nowMs: step.at_ms });
     const { expect: want } = step;
     expect(
       {

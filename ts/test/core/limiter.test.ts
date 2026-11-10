@@ -41,7 +41,7 @@ describe('createLimiter', () => {
     const store: Store = { tier: 'exact', hit: () => Promise.reject(error) };
     const events: unknown[] = [];
     await createLimiter({ ...base, store, onEvent: (e) => events.push(e) }).check('a');
-    expect(events).toEqual([{ type: 'store_error', scope: 't', tier: 'exact', error }]);
+    expect(events).toEqual([{ type: 'store_error', op: 'check', scope: 't', tier: 'exact', error }]);
   });
 
   it('uses the real clock when no time is injected', async () => {
@@ -54,6 +54,71 @@ describe('createLimiter', () => {
     const store: Store = { tier: 'approximate', hit: async () => ({ allowed: false, level: null, ts: null }) };
     const decision = await createLimiter({ ...base, store }).check('a');
     expect(decision.retryAfterMs).toBe(1000);
+  });
+});
+
+describe('peek and reset', () => {
+  const policy = { limit: 2, windowMs: 60_000, scope: 't', onStoreError: 'closed' } as const;
+
+  it('peek never counts, and reset gives the quota back', async () => {
+    const limiter = createLimiter({ ...policy, store: memoryStore() });
+    for (let i = 0; i < 5; i++) expect((await limiter.peek('a')).allowed).toBe(true);
+    expect((await limiter.check('a')).remaining).toBe(1);
+    expect((await limiter.peek('a')).remaining).toBe(1);
+    await limiter.check('a');
+    const denied = await limiter.peek('a');
+    expect(denied).toMatchObject({ allowed: false, reason: 'limited', status: 429 });
+    expect(denied.headers['retry-after']).toBeDefined();
+    expect(await limiter.reset('a')).toBe(true);
+    expect((await limiter.peek('a')).remaining).toBe(2);
+  });
+
+  it('reports the operation in events', async () => {
+    const events: Array<{ type: string; op: string }> = [];
+    const limiter = createLimiter({ ...policy, store: memoryStore(), onEvent: (e) => events.push(e) });
+    await limiter.peek('a');
+    await limiter.check('a');
+    await limiter.reset('a');
+    expect(events.map((e) => [e.type, e.op])).toEqual([
+      ['allowed', 'peek'],
+      ['allowed', 'check'],
+      ['reset', 'reset'],
+    ]);
+  });
+
+  it('throws a TypeError when the store cannot peek or reset', async () => {
+    const limiter = createLimiter({ ...policy, store: cloudflareBindingStore({ binding: undefined, periodSec: 60 }) });
+    await expect(limiter.peek('a')).rejects.toThrow(TypeError);
+    await expect(limiter.reset('a')).rejects.toThrow(/does not support reset/);
+  });
+
+  it('peek follows onStoreError, and a failed reset resolves false with an event', async () => {
+    const error = new Error('down');
+    const store: Store = {
+      tier: 'exact',
+      hit: () => Promise.reject(error),
+      peek: () => Promise.reject(error),
+      reset: () => new Promise(() => {}),
+    };
+    const events: Array<{ type: string; op: string }> = [];
+    const closed = createLimiter({ ...policy, store, storeTimeoutMs: 10, onEvent: (e) => events.push(e) });
+    expect(await closed.peek('a')).toMatchObject({ allowed: false, reason: 'store_error', status: 503 });
+    expect(await closed.reset('a')).toBe(false);
+    expect(events.map((e) => [e.type, e.op])).toEqual([
+      ['store_error', 'peek'],
+      ['store_error', 'reset'],
+    ]);
+    const open = createLimiter({ ...policy, store, onStoreError: 'open' });
+    expect(await open.peek('a')).toMatchObject({ allowed: true, reason: 'store_error' });
+  });
+
+  it('memory peek does not keep a bucket alive against eviction', async () => {
+    const store = memoryStore({ maxKeys: 1 });
+    const params = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
+    await store.hit('a', params, 5000);
+    expect((await store.peek!('a', params, 5001)).allowed).toBe(false);
+    await store.hit('b', params, 5002); // evicts `a`
+    expect((await store.peek!('a', params, 5003)).allowed).toBe(true);
   });
 });
 

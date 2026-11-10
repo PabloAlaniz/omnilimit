@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { applyHit, type MeterState } from '../core/gcra.js';
+import { applyHit, applyPeek, type MeterState } from '../core/gcra.js';
 import type { HitParams, RawHit, Store } from '../core/types.js';
 
 const STATE_KEY = 'meter';
@@ -26,6 +26,16 @@ export class OmnilimitDurableObject extends DurableObject {
     return hit;
   }
 
+  async peek(params: HitParams, nowMs?: number): Promise<RawHit> {
+    const current = (await this.ctx.storage.get<StoredMeter>(STATE_KEY)) ?? null;
+    return applyPeek(current, params, nowMs ?? Date.now());
+  }
+
+  async reset(): Promise<void> {
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+  }
+
   override async alarm(): Promise<void> {
     const current = await this.ctx.storage.get<StoredMeter>(STATE_KEY);
     if (!current) return;
@@ -39,6 +49,8 @@ export class OmnilimitDurableObject extends DurableObject {
 
 interface DurableObjectStubLike {
   hit(params: HitParams, nowMs?: number): Promise<RawHit>;
+  peek(params: HitParams, nowMs?: number): Promise<RawHit>;
+  reset(): Promise<void>;
 }
 
 /** Structural subset of `DurableObjectNamespace<OmnilimitDurableObject>`. */
@@ -49,20 +61,28 @@ export interface OmnilimitNamespace {
 
 /** Atomic and global, using the Durable Object's clock. */
 export function durableObjectStore(namespace: OmnilimitNamespace | undefined): Store {
+  const stubFor = (key: string): DurableObjectStubLike => {
+    if (!namespace) throw new Error('omnilimit: Durable Object namespace binding is missing');
+    return namespace.get(namespace.idFromName(key) as never) as DurableObjectStubLike;
+  };
+  // Workers RPC rejects `undefined` differently across versions, so pass plain values only.
+  const plain = (params: HitParams): HitParams => ({
+    limit: params.limit,
+    windowMs: params.windowMs,
+    capacity: params.capacity,
+    drainMs: params.drainMs,
+  });
+  const call = async (op: 'hit' | 'peek', key: string, params: HitParams, nowMs?: number): Promise<RawHit> => {
+    const stub = stubFor(key);
+    const reply = await (nowMs === undefined ? stub[op](plain(params)) : stub[op](plain(params), nowMs));
+    return { allowed: reply.allowed, level: reply.level, ts: reply.ts };
+  };
   return {
     tier: 'exact',
-    async hit(key: string, params: HitParams, nowMs?: number): Promise<RawHit> {
-      if (!namespace) throw new Error('omnilimit: Durable Object namespace binding is missing');
-      const stub = namespace.get(namespace.idFromName(key) as never) as DurableObjectStubLike;
-      // Workers RPC rejects `undefined` differently across versions, so pass plain values only.
-      const plain: HitParams = {
-        limit: params.limit,
-        windowMs: params.windowMs,
-        capacity: params.capacity,
-        drainMs: params.drainMs,
-      };
-      const reply = await (nowMs === undefined ? stub.hit(plain) : stub.hit(plain, nowMs));
-      return { allowed: reply.allowed, level: reply.level, ts: reply.ts };
+    hit: (key, params, nowMs) => call('hit', key, params, nowMs),
+    peek: (key, params, nowMs) => call('peek', key, params, nowMs),
+    async reset(key: string): Promise<void> {
+      await stubFor(key).reset();
     },
   };
 }

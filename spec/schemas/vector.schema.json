@@ -24,10 +24,14 @@
             "minItems": 1,
             "items": {
               "type": "object",
-              "required": ["at_ms", "id", "expect"],
+              "required": ["at_ms", "id"],
+              "if": { "required": ["op"], "properties": { "op": { "const": "reset" } } },
+              "then": { "not": { "required": ["expect"] } },
+              "else": { "required": ["expect"] },
               "properties": {
                 "at_ms": { "type": "integer" },
                 "id": { "type": "string" },
+                "op": { "enum": ["peek", "reset"], "description": "Absent means hit." },
                 "expect": {
                   "allOf": [
                     { "$ref": "#/definitions/decision" },
