@@ -76,6 +76,13 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
             recording.raw = store.hit(key, params, now_ms)
             return recording.raw
 
+        def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            recording.raw = store.peek(key, params, now_ms)
+            return recording.raw
+
+        def reset(self, key: str) -> None:
+            store.reset(key)
+
     limiter = Limiter(
         **policy_of(vector),
         store=Recorder(),
@@ -86,7 +93,15 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
         headers=recording.headers,
     )
     for index, step in enumerate(vector["steps"]):
-        decision = limiter.check(step["id"], now_ms=step["at_ms"])
+        op = step.get("op", "hit")
+        if op == "reset":
+            assert limiter.reset(step["id"]) is True, f"{vector['id']} step {index}"
+            continue
+        recording.raw = None
+        if op == "peek":
+            decision = limiter.peek(step["id"], now_ms=step["at_ms"])
+        else:
+            decision = limiter.check(step["id"], now_ms=step["at_ms"])
         got = outcome(decision, recording.raw, recording.profiles)
         assert got == step["expect"], f"{vector['id']} step {index}"
 
@@ -102,6 +117,16 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
             recording.raw = await result if asyncio.iscoroutine(result) else result
             return recording.raw
 
+        async def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            result = store.peek(key, params, now_ms)
+            recording.raw = await result if asyncio.iscoroutine(result) else result
+            return recording.raw
+
+        async def reset(self, key: str) -> None:
+            result = store.reset(key)
+            if asyncio.iscoroutine(result):
+                await result
+
     limiter = AsyncLimiter(
         **policy_of(vector),
         store=Recorder(),
@@ -112,7 +137,15 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
         headers=recording.headers,
     )
     for index, step in enumerate(vector["steps"]):
-        decision = await limiter.check(step["id"], now_ms=step["at_ms"])
+        op = step.get("op", "hit")
+        if op == "reset":
+            assert await limiter.reset(step["id"]) is True, f"{vector['id']} step {index}"
+            continue
+        recording.raw = None
+        if op == "peek":
+            decision = await limiter.peek(step["id"], now_ms=step["at_ms"])
+        else:
+            decision = await limiter.check(step["id"], now_ms=step["at_ms"])
         got = outcome(decision, recording.raw, recording.profiles)
         assert got == step["expect"], f"{vector['id']} step {index}"
 

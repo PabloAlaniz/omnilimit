@@ -35,6 +35,13 @@ export interface RawHit {
 export interface Store {
   readonly tier: Tier;
   hit(key: string, params: HitParams, nowMs?: number): Promise<RawHit>;
+  /**
+   * The decision `hit` would give now, without writing. `level` is the drained level and `ts`
+   * the stored timestamp. Optional: approximate stores cannot answer it.
+   */
+  peek?(key: string, params: HitParams, nowMs?: number): Promise<RawHit>;
+  /** Delete the bucket, so the next hit starts from an empty meter. Optional. */
+  reset?(key: string): Promise<void>;
 }
 
 export type DecisionReason = 'ok' | 'limited' | 'store_error';
@@ -62,9 +69,13 @@ export interface HeaderInput {
   effectiveMs: number;
 }
 
+/** The limiter operation an event comes from. */
+export type LimiterOp = 'check' | 'peek' | 'reset';
+
 export type LimiterEvent =
-  | { type: 'allowed' | 'limited'; scope: string; tier: Tier }
-  | { type: 'store_error'; scope: string; tier: Tier; error: unknown };
+  | { type: 'allowed' | 'limited'; op: 'check' | 'peek'; scope: string; tier: Tier }
+  | { type: 'reset'; op: 'reset'; scope: string; tier: Tier }
+  | { type: 'store_error'; op: LimiterOp; scope: string; tier: Tier; error: unknown };
 
 export interface LimiterOptions extends Policy {
   store: Store;
@@ -88,5 +99,19 @@ export interface LimiterOptions extends Policy {
 export interface Limiter {
   readonly scope: string;
   readonly tier: Tier;
+  /** Count one request and decide. */
   check(id: string, options?: { nowMs?: number }): Promise<Decision>;
+  /**
+   * The decision `check` would give now, without counting. When allowed, `remaining` includes
+   * the request you asked about. Advisory: a concurrent request can take the last unit, so
+   * the `check` that follows is still the authority. Throws a `TypeError` if the store cannot
+   * peek (approximate stores); store failures follow `onStoreError` like `check`.
+   */
+  peek(id: string, options?: { nowMs?: number }): Promise<Decision>;
+  /**
+   * Forget everything counted for `id`. Resolves `true` once deleted and `false` if the store
+   * failed or timed out (reported through `onEvent`); it never rejects for a store failure.
+   * Throws a `TypeError` if the store cannot reset.
+   */
+  reset(id: string): Promise<boolean>;
 }

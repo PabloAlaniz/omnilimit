@@ -23,6 +23,12 @@ const core = [
   ['key ignores the salt', 'ts/src/core/key.ts', 'const saltBytes = encoder.encode(salt);', "const saltBytes = encoder.encode('');"],
   ['key has no separator', 'ts/src/core/key.ts', 'input.set(idBytes, saltBytes.length + 1);', 'input.set(idBytes, saltBytes.length);'],
   ['retry-after header dropped', 'ts/src/core/headers.ts', "out['retry-after'] = String(toSeconds(decision.retryAfterMs));", ''],
+  ['peek reports the level after a hit', 'ts/src/core/gcra.ts', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained + params.windowMs, ts };'],
+  ['peek uses the request clock as ts', 'ts/src/core/gcra.ts', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts: t };'],
+  ['memory peek consumes quota', 'ts/src/stores/memory.ts', 'return applyPeek(entries.get(key) ?? null, params, nowMs ?? Date.now());', 'const r = applyHit(entries.get(key) ?? null, params, nowMs ?? Date.now()); if (r.write) entries.set(key, { ...r.write, expiresAt: 0 }); return applyPeek(entries.get(key) ?? null, params, nowMs ?? Date.now());'],
+  ['memory reset does not delete', 'ts/src/stores/memory.ts', '      entries.delete(key);\n    },\n  };', '      void key;\n    },\n  };'],
+  ['peek counts like check', 'ts/src/core/limiter.ts', "return decide('peek', () => peekFn(key, policy, peekOptions?.nowMs));", "return decide('peek', () => store.hit(key, policy, peekOptions?.nowMs));"],
+  ['failed reset reports success', 'ts/src/core/limiter.ts', "        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });\n        return false;", "        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });\n        return true;"],
 ];
 
 const scripts = [
@@ -31,6 +37,10 @@ const scripts = [
   ['lua: no expiry', 'spec/scripts/redis/hit.lua', "  redis.call('PEXPIRE', KEYS[1], drain_ms)\n", ''],
   ['sql: no row lock', 'spec/scripts/postgres/001_v1.sql', '  WHERE s.key = p_key\n  FOR UPDATE;', '  WHERE s.key = p_key;'],
   ['sql: denied requests write state', 'spec/scripts/postgres/001_v1.sql', '    RETURN QUERY SELECT false, v_drained, v_ts;', '    UPDATE omnilimit_state AS s SET level = v_drained, ts_ms = v_t WHERE s.key = p_key;\n    RETURN QUERY SELECT false, v_drained, v_t;'],
+  ['lua peek: does not drain', 'spec/scripts/redis/peek.lua', 'local drained = math.max(0, level - math.min(t - ts, drain_ms) * limit)', 'local drained = level'],
+  ['lua peek: capacity check is off by one', 'spec/scripts/redis/peek.lua', 'if drained + window_ms <= capacity then', 'if drained + window_ms < capacity then'],
+  ['sql peek: missing row reports ts 0', 'spec/scripts/postgres/002_peek.sql', '    v_ts := v_now;', '    v_ts := 0;'],
+  ['sql peek: writes a placeholder row', 'spec/scripts/postgres/002_peek.sql', 'BEGIN\n  SELECT s.level', "BEGIN\n  INSERT INTO omnilimit_state (key, level, ts_ms, expires_at_ms) VALUES (p_key, 0, 0, 0) ON CONFLICT (key) DO NOTHING;\n  SELECT s.level"],
 ];
 
 function testsFail(command) {

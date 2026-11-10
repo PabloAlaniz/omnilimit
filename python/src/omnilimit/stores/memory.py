@@ -7,7 +7,7 @@ import time
 from collections import OrderedDict
 from typing import Literal
 
-from omnilimit._gcra import MeterState, apply_hit
+from omnilimit._gcra import MeterState, apply_hit, apply_peek
 from omnilimit._types import HitParams, RawHit
 
 
@@ -36,6 +36,18 @@ class MemoryStore:
                 self._entries.move_to_end(key)
                 self._evict(now)
             return hit
+
+    def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        """What `hit` would answer now. It writes nothing and leaves the eviction order alone."""
+        now = now_ms if now_ms is not None else time.time_ns() // 1_000_000
+        with self._lock:
+            entry = self._entries.get(key)
+            return apply_peek(entry[0] if entry else None, params, now)
+
+    def reset(self, key: str) -> None:
+        """Forget the bucket, so the next hit starts from an empty meter."""
+        with self._lock:
+            self._entries.pop(key, None)
 
     def _evict(self, now: int) -> None:
         if len(self._entries) <= self._max_keys:

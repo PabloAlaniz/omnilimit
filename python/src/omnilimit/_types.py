@@ -8,6 +8,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 Tier = Literal["exact", "local", "approximate"]
 Reason = Literal["ok", "limited", "store_error"]
+Op = Literal["check", "peek", "reset"]
 OnStoreError = Literal["open", "closed"]
 HeaderProfile = Literal["draft-11", "legacy", "none"]
 
@@ -34,7 +35,13 @@ class RawHit:
 
 @runtime_checkable
 class Store(Protocol):
-    """A blocking store. It must apply the hit atomically and use its own clock."""
+    """A blocking store. It must apply the hit atomically and use its own clock.
+
+    A store may also offer two optional methods, which `Limiter.peek` and `Limiter.reset` need:
+    `peek(key, params, now_ms=None) -> RawHit` answers what `hit` would, without writing, with
+    the drained level and the stored timestamp (or now, with no bucket); `reset(key) -> None`
+    deletes the bucket. Approximate stores cannot offer them.
+    """
 
     # Read-only, so a store may narrow it to the one tier it promises.
     @property
@@ -45,7 +52,8 @@ class Store(Protocol):
 
 @runtime_checkable
 class AsyncStore(Protocol):
-    """Same contract as `Store`, for event loops."""
+    """Same contract as `Store`, for event loops, including the optional async `peek` and
+    `reset`."""
 
     @property
     def tier(self) -> Tier: ...
@@ -80,12 +88,16 @@ class HeaderInput:
 
 @dataclass(frozen=True, slots=True)
 class LimiterEvent:
-    """Observability event. `error` is only set for `store_error`."""
+    """Observability event. `error` is only set for `store_error`.
 
-    type: Literal["allowed", "limited", "store_error"]
+    `op` is the limiter method the event comes from. A successful `reset` emits type `reset`.
+    """
+
+    type: Literal["allowed", "limited", "store_error", "reset"]
     scope: str
     tier: Tier
     error: Exception | None = None
+    op: Op = "check"
 
 
 HeaderOption = HeaderProfile | Callable[[HeaderInput], dict[str, str]]

@@ -73,6 +73,47 @@ describe('hono', () => {
     }
     expect(statuses).toEqual([200, 429, 429]);
   });
+
+  it('onDenied can answer in the app format, or throw to app.onError with the headers kept', async () => {
+    const custom = build({
+      limiter: limiter(1),
+      onDenied: (denial, c) => new Response(`${denial.error}:${denial.decision?.remaining}`, { status: denial.status, headers: denial.headers }),
+    });
+    await custom.request('/', { headers: cf('203.0.113.1') });
+    const denied = await custom.request('/', { headers: cf('203.0.113.1') });
+    expect([denied.status, await denied.text(), denied.headers.get('retry-after')]).toEqual([429, 'rate_limited:0', '60']);
+
+    const app = new Hono();
+    app.onError((error, c) => c.json({ code: (error as Error).message }, 429));
+    app.use(
+      '*',
+      honoRateLimit({
+        limiter: limiter(1),
+        key: honoIpKey({ preset: 'cloudflare' }),
+        onMissingKey: 'reject',
+        onDenied: (denial) => {
+          throw new Error(denial.error);
+        },
+      }),
+    );
+    app.get('/', (c) => c.text('ok'));
+    await app.request('/', { headers: cf('203.0.113.1') });
+    const thrown = await app.request('/', { headers: cf('203.0.113.1') });
+    expect(await thrown.json()).toEqual({ code: 'rate_limited' });
+    expect(thrown.headers.get('retry-after')).toBe('60');
+  });
+
+  it('onDenied receives client_not_identified without a decision', async () => {
+    const seen: unknown[] = [];
+    const app = build({
+      onDenied: (denial) => {
+        seen.push([denial.error, denial.status, denial.decision]);
+        return new Response(null, { status: 400 });
+      },
+    });
+    expect((await app.request('/')).status).toBe(400);
+    expect(seen).toEqual([['client_not_identified', 400, null]]);
+  });
 });
 
 describe('next', () => {
@@ -101,6 +142,19 @@ describe('next', () => {
     expect(first.headers).toHaveProperty('ratelimit');
     const second = await checkRateLimit(request(), shared);
     expect(second.denied?.status).toBe(429);
+  });
+
+  it('onDenied builds the denial response', async () => {
+    const shared = {
+      ...options,
+      limiter: limiter(1),
+      onDenied: (denial: { status: number; headers: Record<string, string> }) =>
+        Response.json({ code: 'slow_down' }, { status: denial.status, headers: denial.headers }),
+    };
+    await checkRateLimit(request(), shared);
+    const { denied } = await checkRateLimit(request(), shared);
+    expect(denied?.headers.get('retry-after')).toBe('60');
+    expect(await denied?.json()).toEqual({ code: 'slow_down' });
   });
 });
 
@@ -142,5 +196,27 @@ describe('express', () => {
     const response = await fetch(url);
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ message: 'bad key' });
+  });
+
+  it('onDenied answers with the headers already set, and its errors reach next', async () => {
+    const url = await start({
+      onDenied: (denial, _req, res) => {
+        res.status(denial.status).json({ code: 'slow_down' });
+      },
+    });
+    await fetch(url);
+    const denied = await fetch(url);
+    expect([denied.status, denied.headers.get('retry-after')]).toEqual([429, '60']);
+    expect(await denied.json()).toEqual({ code: 'slow_down' });
+    server?.close();
+
+    const failing = await start({
+      onDenied: async () => {
+        throw new Error('custom denial');
+      },
+    });
+    await fetch(failing);
+    const response = await fetch(failing);
+    expect(await response.json()).toEqual({ message: 'custom denial' });
   });
 });

@@ -35,8 +35,10 @@ export default {
     if (body.op === 'sequence') {
       const limiter = createLimiter(options(body['policy'] as never, body['salt'] as string));
       const out = [];
-      for (const step of body['steps'] as Array<{ id: string; at_ms: number }>) {
-        out.push(await limiter.check(step.id, { nowMs: step.at_ms }));
+      for (const step of body['steps'] as Array<{ id: string; at_ms: number; op?: 'peek' | 'reset' }>) {
+        if (step.op === 'reset') out.push({ reset: await limiter.reset(step.id) });
+        else if (step.op === 'peek') out.push(await limiter.peek(step.id, { nowMs: step.at_ms }));
+        else out.push(await limiter.check(step.id, { nowMs: step.at_ms }));
       }
       return Response.json(out);
     }
@@ -49,9 +51,29 @@ export default {
       );
       return Response.json({ allowed: results.filter((r) => r.allowed).length, errors: results.filter((r) => r.reason === 'store_error').length });
     }
+    if (body.op === 'mixed-concurrency') {
+      // Peeks interleaved with hits: only hits may take quota, and exactly `burst` of them.
+      const limiter = createLimiter(options(body['policy'] as never, body['salt'] as string));
+      const id = body['id_value'] as string;
+      const nowMs = body['at_ms'] as number;
+      const results = await Promise.all(
+        Array.from({ length: body['hits'] as number }, (_, i) =>
+          i % 2 === 0 ? limiter.peek(id, { nowMs }).then(() => null) : limiter.check(id, { nowMs }),
+        ),
+      );
+      const checks = results.filter((r) => r !== null);
+      return Response.json({ allowed: checks.filter((r) => r.allowed).length, errors: checks.filter((r) => r.reason === 'store_error').length });
+    }
     if (body.op === 'real-clock') {
       const limiter = createLimiter({ limit: 1, windowMs: 1000, store, scope: 'real', salt: body['salt'] as string, onStoreError: 'closed' });
       return Response.json([await limiter.check('a'), await limiter.check('a')]);
+    }
+    if (body.op === 'real-reset') {
+      const limiter = createLimiter({ limit: 1, windowMs: 60_000, store, scope: 'real', salt: body['salt'] as string, onStoreError: 'closed' });
+      const first = await limiter.check('a');
+      const denied = await limiter.peek('a');
+      const reset = await limiter.reset('a');
+      return Response.json({ first, denied, reset, after: await limiter.check('a') });
     }
     if (body.op === 'binding') {
       const limiter = createLimiter({

@@ -1,0 +1,225 @@
+{
+ "spec": "1",
+ "id": "sequence/ops-random-007",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 1,
+  "window_ms": 60000,
+  "burst": 1
+ },
+ "scope": "t",
+ "salt": "s",
+ "steps": [
+  {
+   "at_ms": 1700000001690,
+   "id": "a",
+   "op": "reset"
+  },
+  {
+   "at_ms": 1700000061691,
+   "id": "b",
+   "op": "peek",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 0,
+    "retry_after_ms": null,
+    "state": {
+     "level": 0,
+     "ts": 1700000061691
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=1;t=0"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "0"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000121692,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 60000,
+     "ts": 1700000121692
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=0;t=60"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "60"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000181693,
+   "id": "b",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 60000,
+     "ts": 1700000181693
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=0;t=60"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "60"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000182026,
+   "id": "a",
+   "op": "reset"
+  },
+  {
+   "at_ms": 1700000182026,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 60000,
+     "ts": 1700000182026
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=0;t=60"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "60"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000242026,
+   "id": "b",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 60000,
+     "ts": 1700000242026
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=0;t=60"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "60"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000242027,
+   "id": "b",
+   "expect": {
+    "allowed": false,
+    "reason": "limited",
+    "status": 429,
+    "remaining": 0,
+    "reset_ms": 59999,
+    "retry_after_ms": 59999,
+    "state": {
+     "level": 59999,
+     "ts": 1700000242026
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=0;t=60",
+      "retry-after": "60"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "60",
+      "retry-after": "60"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000302028,
+   "id": "b",
+   "op": "reset"
+  },
+  {
+   "at_ms": 1700000303028,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 60000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 60000,
+     "ts": 1700000303028
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=1;w=60",
+      "ratelimit": "\"t\";r=0;t=60"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "60"
+     }
+    }
+   }
+  }
+ ]
+}

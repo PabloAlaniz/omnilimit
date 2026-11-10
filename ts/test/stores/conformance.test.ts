@@ -3,7 +3,7 @@ import { Redis as IORedis } from 'ioredis';
 import pg from 'pg';
 import { createClient } from 'redis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { REDIS_HIT_LUA, REDIS_HIT_SHA1 } from '../../src/generated/assets.js';
+import { REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_LUA, REDIS_PEEK_SHA1 } from '../../src/generated/assets.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { MIGRATION_SQL, postgresStore } from '../../src/stores/postgres.js';
 import { fromIoredis, fromNodeRedis, redisStore } from '../../src/stores/redis.js';
@@ -97,6 +97,22 @@ for (const url of redisUrls) {
       expect(await io.hgetall(key)).toEqual(before);
     });
 
+    it('peek loads its own script, never writes, and reset deletes the key', async () => {
+      await io.script('FLUSH');
+      const key = `ol:test:${randomUUID()}`;
+      const params = { limit: 1, windowMs: 5000, capacity: 5000, drainMs: 5000 };
+      expect((await ioStore.peek!(key, params)).allowed).toBe(true);
+      expect(await io.exists(key)).toBe(0);
+      expect(await io.script('EXISTS', REDIS_PEEK_SHA1)).toEqual([1]);
+      expect(await io.script('LOAD', REDIS_PEEK_LUA)).toBe(REDIS_PEEK_SHA1);
+      await ioStore.hit(key, params, 1_000_000);
+      const before = await io.hgetall(key);
+      expect((await ioStore.peek!(key, params, 1_001_000)).allowed).toBe(false);
+      expect(await io.hgetall(key)).toEqual(before);
+      await nodeStore.reset!(key);
+      expect(await io.exists(key)).toBe(0);
+    });
+
     suite('ioredis', () => ioStore);
     suite('node-redis', () => nodeStore);
   });
@@ -134,6 +150,20 @@ for (const url of postgresUrls) {
       const before = await read();
       expect((await store.hit(key, params, 1_001_000)).allowed).toBe(false);
       expect(await read()).toEqual(before);
+    });
+
+    it('peek never writes, not even a placeholder row, and reset deletes the row', async () => {
+      const key = `ol:test:${randomUUID()}`;
+      const params = { limit: 1, windowMs: 5000, capacity: 5000, drainMs: 5000 };
+      const read = async () => (await pool.query('SELECT level, ts_ms, expires_at_ms FROM omnilimit_state WHERE key = $1', [key])).rows;
+      expect((await store.peek!(key, params)).allowed).toBe(true);
+      expect(await read()).toEqual([]);
+      await store.hit(key, params, 1_000_000);
+      const before = await read();
+      expect((await store.peek!(key, params, 1_001_000)).allowed).toBe(false);
+      expect(await read()).toEqual(before);
+      await store.reset!(key);
+      expect(await read()).toEqual([]);
     });
 
     suite('pg', () => store);

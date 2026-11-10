@@ -29,7 +29,7 @@ from support import (
 )
 
 from omnilimit import AsyncLimiter, HitParams, Limiter
-from omnilimit._generated import REDIS_HIT_LUA, REDIS_HIT_SHA1
+from omnilimit._generated import REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_SHA1
 from omnilimit.stores.postgres import MIGRATION_SQL, AsyncPostgresStore, PostgresStore
 from omnilimit.stores.redis import AsyncRedisStore, RedisStore
 
@@ -131,6 +131,30 @@ def test_redis_does_not_write_on_denial(sync_redis: Any) -> None:
     assert sync_redis.hgetall(key) == before
 
 
+def test_redis_peek_writes_nothing_and_loads_its_script(sync_redis: Any) -> None:
+    key = f"ol:test:{uuid.uuid4()}"
+    store = RedisStore(sync_redis)
+    sync_redis.script_flush()
+    assert store.peek(key, PARAMS, 1_000_000).level == 0
+    assert sync_redis.exists(key) == 0
+    assert sync_redis.script_exists(REDIS_PEEK_SHA1) == [True]
+    store.hit(key, PARAMS, 1_000_000)
+    before = (sync_redis.hgetall(key), sync_redis.pttl(key))
+    assert store.peek(key, PARAMS, 1_001_000).level == 4000
+    after = (sync_redis.hgetall(key), sync_redis.pttl(key))
+    assert after[0] == before[0]
+    assert after[1] <= before[1]
+
+
+def test_redis_reset_deletes_the_bucket(sync_redis: Any) -> None:
+    key = f"ol:test:{uuid.uuid4()}"
+    store = RedisStore(sync_redis)
+    store.hit(key, PARAMS, 1_000_000)
+    store.reset(key)
+    assert sync_redis.exists(key) == 0
+    store.reset(key)  # a missing bucket is fine
+
+
 def test_redis_other_errors_are_not_retried_as_noscript() -> None:
     class Broken:
         def evalsha(self, *args: Any) -> Any:
@@ -160,6 +184,24 @@ def test_async_redis_other_errors_are_not_retried_as_noscript() -> None:
 
     with pytest.raises(ConnectionError):
         asyncio.run(AsyncRedisStore(Broken()).hit("k", PARAMS))
+
+
+def test_async_redis_peek_and_reset(async_redis_factory: Any) -> None:
+    async def run() -> None:
+        client = async_redis_factory()
+        try:
+            await client.script_flush()
+            key = f"ol:test:{uuid.uuid4()}"
+            store = AsyncRedisStore(client)
+            await store.hit(key, PARAMS, 1_000_000)
+            assert (await store.peek(key, PARAMS, 1_000_000)).allowed is False
+            assert (await store.peek(key, PARAMS, 1_000_000)).level == 5000
+            await store.reset(key)
+            assert await client.exists(key) == 0
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
 
 
 @sequences
@@ -280,6 +322,33 @@ def test_postgres_does_not_write_on_denial(pg_pool: ConnectionPool) -> None:
         assert connection.execute(sql, (key,)).fetchall() == before
 
 
+def test_postgres_peek_writes_nothing_and_reset_deletes(pg_pool: ConnectionPool) -> None:
+    store = PostgresStore(pg_pool)
+    key = f"ol:test:{uuid.uuid4()}"
+    sql = "SELECT level, ts_ms, expires_at_ms FROM omnilimit_state WHERE key = %s"
+    assert store.peek(key, PARAMS, 1_000_000).ts == 1_000_000
+    with pg_pool.connection() as connection:
+        assert connection.execute(sql, (key,)).fetchall() == []
+    store.hit(key, PARAMS, 1_000_000)
+    with pg_pool.connection() as connection:
+        before = connection.execute(sql, (key,)).fetchall()
+    assert store.peek(key, PARAMS, 1_001_000).level == 4000
+    with pg_pool.connection() as connection:
+        assert connection.execute(sql, (key,)).fetchall() == before
+    store.reset(key)
+    with pg_pool.connection() as connection:
+        assert connection.execute(sql, (key,)).fetchall() == []
+
+
+def test_postgres_reset_on_an_autocommit_connection(pg_url: str) -> None:
+    with psycopg.connect(pg_url, autocommit=True) as connection:
+        store = PostgresStore(connection)
+        key = f"ol:test:{uuid.uuid4()}"
+        store.hit(key, PARAMS, 1_000_000)
+        store.reset(key)
+        assert store.peek(key, PARAMS, 1_000_000).level == 0
+
+
 def test_postgres_no_rows_is_an_error() -> None:
     class Cursor:
         def fetchone(self) -> None:
@@ -291,14 +360,32 @@ def test_postgres_no_rows_is_an_error() -> None:
         def execute(self, *args: Any) -> Cursor:
             return Cursor()
 
-    with pytest.raises(ValueError, match="no rows"):
+    with pytest.raises(ValueError, match="omnilimit_hit_v1 returned no rows"):
         PostgresStore(Db()).hit("k", PARAMS)
+    with pytest.raises(ValueError, match="omnilimit_peek_v1 returned no rows"):
+        PostgresStore(Db()).peek("k", PARAMS)
 
 
 async def _async_pool(url: str) -> AsyncConnectionPool:
     pool = AsyncConnectionPool(url, min_size=1, max_size=20, open=False, timeout=30)
     await pool.open()
     return pool
+
+
+def test_async_postgres_pool_peek_and_reset(pg_url: str) -> None:
+    async def run() -> None:
+        pool = await _async_pool(pg_url)
+        try:
+            store = AsyncPostgresStore(pool)
+            key = f"ol:test:{uuid.uuid4()}"
+            await store.hit(key, PARAMS, 1_000_000)
+            assert not (await store.peek(key, PARAMS, 1_000_000)).allowed
+            await store.reset(key)
+            assert (await store.peek(key, PARAMS, 1_000_000)).allowed
+        finally:
+            await pool.close()
+
+    asyncio.run(run())
 
 
 @sequences
@@ -333,6 +420,10 @@ def test_async_postgres_connection_and_cleanup(pg_url: str) -> None:
             key = f"ol:test:{uuid.uuid4()}"
             assert (await store.hit(key, PARAMS, 1_000_000)).allowed
             assert not (await store.hit(key, PARAMS, 1_001_000)).allowed
+            assert (await store.peek(key, PARAMS, 1_001_000)).level == 4000
+            await store.reset(key)
+            assert (await store.peek(key, PARAMS, 1_001_000)).level == 0
+            await store.hit(key, PARAMS, 1_000_000)
             assert await store.cleanup() >= 1
         finally:
             await connection.close()

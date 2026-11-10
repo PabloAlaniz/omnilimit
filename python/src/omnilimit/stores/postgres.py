@@ -19,6 +19,12 @@ _HIT_SQL = (
     "SELECT allowed, new_level, new_ts FROM omnilimit_hit_v1("
     "%s::text, %s::bigint, %s::bigint, %s::bigint, %s::bigint, %s::bigint)"
 )
+_PEEK_FN = "omnilimit_peek_v1"
+_PEEK_SQL = (
+    "SELECT allowed, new_level, new_ts FROM omnilimit_peek_v1("
+    "%s::text, %s::bigint, %s::bigint, %s::bigint, %s::bigint, %s::bigint)"
+)
+_RESET_SQL = "DELETE FROM omnilimit_state WHERE key = %s"
 _CLEANUP_SQL = "SELECT omnilimit_cleanup_v1(%s::integer)"
 
 
@@ -36,9 +42,9 @@ def _hit_params(key: str, params: HitParams, now_ms: int | None) -> tuple[Any, .
     return (key, params.limit, params.window_ms, params.capacity, params.drain_ms, now_ms)
 
 
-def _parse(row: Any) -> RawHit:
+def _parse(row: Any, fn: str = "omnilimit_hit_v1") -> RawHit:
     if row is None:
-        raise ValueError("omnilimit: omnilimit_hit_v1 returned no rows")
+        raise ValueError(f"omnilimit: {fn} returned no rows")
     return RawHit(allowed=row[0] is True, level=int(row[1]), ts=int(row[2]))
 
 
@@ -59,6 +65,17 @@ class PostgresStore:
 
     def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
         return _parse(self._fetch(_HIT_SQL, _hit_params(key, params, now_ms)))
+
+    def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        """What `hit` would answer now, without writing or locking."""
+        return _parse(self._fetch(_PEEK_SQL, _hit_params(key, params, now_ms)), _PEEK_FN)
+
+    def reset(self, key: str) -> None:
+        if _is_pool(self._db):
+            with self._db.connection() as connection:
+                connection.execute(_RESET_SQL, (key,))
+            return
+        self._db.execute(_RESET_SQL, (key,))
 
     def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""
@@ -84,6 +101,17 @@ class AsyncPostgresStore:
 
     async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
         return _parse(await self._fetch(_HIT_SQL, _hit_params(key, params, now_ms)))
+
+    async def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        """What `hit` would answer now, without writing or locking."""
+        return _parse(await self._fetch(_PEEK_SQL, _hit_params(key, params, now_ms)), _PEEK_FN)
+
+    async def reset(self, key: str) -> None:
+        if _is_pool(self._db):
+            async with self._db.connection() as connection:
+                await connection.execute(_RESET_SQL, (key,))
+            return
+        await self._db.execute(_RESET_SQL, (key,))
 
     async def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""

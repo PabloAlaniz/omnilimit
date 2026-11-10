@@ -90,7 +90,7 @@ CORE = [
     (
         "async store timeout never fires",
         "_limiter.py",
-        "await asyncio.wait_for(result, core.timeout_s)",
+        "await asyncio.wait_for(result, self._core.timeout_s)",
         "await result",
     ),
     (
@@ -112,6 +112,21 @@ CORE = [
         "stores/memory.py",
         "with self._lock:",
         "if True:",
+    ),
+    (
+        "peek writes like a hit",
+        "stores/memory.py",
+        "return apply_peek(entry[0] if entry else None, params, now)",
+        "hit, write = apply_hit(entry[0] if entry else None, params, now)\n"
+        "            if write is not None:\n"
+        "                self._entries[key] = (write, write.ts + params.drain_ms)\n"
+        "            return hit",
+    ),
+    (
+        "reset does not delete",
+        "stores/memory.py",
+        "self._entries.pop(key, None)",
+        "self._entries.get(key)",
     ),
 ]
 
