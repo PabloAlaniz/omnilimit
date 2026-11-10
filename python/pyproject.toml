@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "omnilimit"
-version = "0.1.1"
+version = "0.2.0"
 description = "Rate limiting that behaves the same across stacks, with trusted client IPs and an explicit failure mode."
 readme = "README.md"
 license = "MIT"

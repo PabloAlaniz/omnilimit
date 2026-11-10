@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.1.1...ts-v0.2.0) (2026-11-10)
+
+
+### Features
+
+* add peek, reset and onDenied ([#11](https://github.com/PabloAlaniz/omnilimit/issues/11)) ([36ab24d](https://github.com/PabloAlaniz/omnilimit/commit/36ab24d6608d5d0a23ccf046b957050256bc35c7))
+
 ## [0.1.1](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.1.0...ts-v0.1.1) (2026-11-06)
 
 
