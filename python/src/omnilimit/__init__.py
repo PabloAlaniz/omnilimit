@@ -24,7 +24,7 @@ from omnilimit.stores.memory import MemoryStore
 try:
     __version__ = version("omnilimit")
 except PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.1.1"
+    __version__ = "0.2.0"
 
 __all__ = [
     "SPEC_VERSION",
