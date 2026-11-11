@@ -11,6 +11,7 @@ contract: one behaviour across ports, verified by vectors from the independent g
 | Shadow mode | Roll a limit out without enforcing it | Decide and report through `onEvent`, but allow |
 | Metrics | Dashboards without writing an `onEvent` hook | OpenTelemetry counters for allowed, limited, store error and latency |
 | Durable Object placement | Lower latency, data residency | `locationHint` and jurisdiction options for `durableObjectStore` |
+| Cold-start aware timeouts | The first call to a new Durable Object can take over a second, longer than the 1 s default, so a `closed` limit answers 503 right after a deploy | A per-store default timeout (higher for Durable Objects), documented next to `onStoreError` |
 | Penalties | Repeat offenders wait longer | Escalating windows on top of peek and reset, if it can be specified without floats |
 
 Done in 0.2: `peek` and `reset` (lockouts that count only failures), and `onDenied` in every adapter.
