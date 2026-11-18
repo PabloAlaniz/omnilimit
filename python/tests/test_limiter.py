@@ -13,7 +13,7 @@ import pytest
 from omnilimit import AsyncLimiter, HitParams, Limiter, LimiterEvent, MemoryStore, RawHit
 from omnilimit._gcra import resolve_policy
 from omnilimit._key import derive_key
-from omnilimit.ip import canonical_ip, mask_ip, resolve_client_ip
+from omnilimit.ip import canonical_ip, client_key, mask_ip, resolve_client_ip
 from omnilimit.stores import memory
 
 BASE: dict[str, Any] = {"scope": "t", "limit": 2, "window_ms": 1000, "on_store_error": "closed"}
@@ -185,6 +185,36 @@ def test_memory_store_uses_the_real_clock() -> None:
     assert not denied.allowed
     assert denied.retry_after_ms is not None
     assert 0 < denied.retry_after_ms <= 1000
+
+
+def test_memory_store_takes_its_clock_from_now() -> None:
+    t = [1_000_000]
+    limiter = Limiter(
+        store=MemoryStore(now=lambda: t[0]),
+        scope="clock",
+        limit=2,
+        window_ms=60_000,
+        on_store_error="closed",
+    )
+    limiter.check("k")
+    limiter.check("k")
+    assert not limiter.check("k").allowed
+    assert not limiter.peek("k").allowed
+    t[0] += 30_000  # one unit comes back
+    assert limiter.peek("k").allowed
+    assert limiter.check("k").allowed
+    assert not limiter.check("k").allowed
+
+
+def test_client_key_resolves_and_masks_in_one_step() -> None:
+    v6 = {"cf-connecting-ip": "2001:db8:1:2:3:4:5:6"}
+    assert client_key(v6, preset="cloudflare") == "2001:db8:1:2::"
+    assert client_key(v6, preset="cloudflare", ipv6_prefix=48) == "2001:db8:1::"
+    assert client_key({"cf-connecting-ip": "203.0.113.7"}, preset="cloudflare") == "203.0.113.7"
+    assert client_key({"x-forwarded-for": "6.6.6.6, 203.0.113.9"}, xff_hops=0) == "203.0.113.9"
+    assert client_key({}, "198.51.100.9", use_peer=True) == "198.51.100.9"
+    assert client_key({}, preset="cloudflare") is None
+    assert client_key({"cf-connecting-ip": "nope"}, preset="cloudflare") is None
 
 
 def test_memory_store_evicts_expired_buckets_first() -> None:

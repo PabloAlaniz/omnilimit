@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createLimiter, memoryStore, SPEC_VERSION, type Store } from '../../src/index.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
 import { ipKey } from '../../src/adapters/shared.js';
-import { maskIp, resolveClientIp } from '../../src/ip/index.js';
+import { clientKey, maskIp, resolveClientIp } from '../../src/ip/index.js';
 
 const base = { limit: 1, windowMs: 1000, scope: 't', onStoreError: 'closed' } as const;
 
@@ -138,6 +138,27 @@ describe('memoryStore', () => {
     expect((await store.hit('new', params, 5004)).allowed).toBe(false);
     expect((await store.hit('old', params, 5005)).allowed).toBe(true);
   });
+
+  it('takes its clock from `now`, so tests move time without faking timers', async () => {
+    let t = 1_000_000;
+    const limiter = createLimiter({
+      store: memoryStore({ now: () => t }),
+      scope: 'clock',
+      limit: 2,
+      windowMs: 60_000,
+      onStoreError: 'closed',
+    });
+    await limiter.check('k');
+    await limiter.check('k');
+    expect((await limiter.check('k')).allowed).toBe(false);
+    expect((await limiter.peek('k')).allowed).toBe(false);
+    t += 30_000; // one unit comes back
+    expect((await limiter.peek('k')).allowed).toBe(true);
+    expect((await limiter.check('k')).allowed).toBe(true);
+    expect((await limiter.check('k')).allowed).toBe(false);
+    // An explicit nowMs still wins over the clock.
+    expect((await limiter.check('k', { nowMs: t + 60_000 })).allowed).toBe(true);
+  });
 });
 
 describe('cloudflareBindingStore', () => {
@@ -147,6 +168,16 @@ describe('cloudflareBindingStore', () => {
 });
 
 describe('ip helpers', () => {
+  it('clientKey resolves and masks in one step, or answers null', () => {
+    const v6 = { headers: { 'cf-connecting-ip': '2001:db8:1:2:3:4:5:6' } };
+    expect(clientKey(v6, { preset: 'cloudflare' })).toBe('2001:db8:1:2::');
+    expect(clientKey(v6, { preset: 'cloudflare', ipv6Prefix: 48 })).toBe('2001:db8:1::');
+    expect(clientKey({ headers: { 'cf-connecting-ip': '203.0.113.7' } }, { preset: 'cloudflare' })).toBe('203.0.113.7');
+    expect(clientKey({ headers: { 'x-forwarded-for': '6.6.6.6, 203.0.113.9' } }, { xff: { hops: 0 } })).toBe('203.0.113.9');
+    expect(clientKey({ headers: {} }, { preset: 'cloudflare' })).toBeNull();
+    expect(clientKey({ headers: { 'cf-connecting-ip': 'nope' } }, { preset: 'cloudflare' })).toBeNull();
+  });
+
   it('rejects bad options', () => {
     expect(() => maskIp('2001:db8::1', 129)).toThrow(RangeError);
     expect(maskIp('nope', 64)).toBeNull();

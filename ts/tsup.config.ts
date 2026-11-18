@@ -8,6 +8,7 @@ export default defineConfig({
     postgres: 'src/stores/postgres.ts',
     cloudflare: 'src/stores/cloudflare.ts',
     'cloudflare-do': 'src/stores/cloudflare-do.ts',
+    web: 'src/adapters/web.ts',
     hono: 'src/adapters/hono.ts',
     next: 'src/adapters/next.ts',
     express: 'src/adapters/express.ts',

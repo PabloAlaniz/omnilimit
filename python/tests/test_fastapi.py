@@ -148,6 +148,54 @@ def test_async_key_function_needs_an_async_limiter() -> None:
         client.get("/")
 
 
+@both
+def test_skip_lets_requests_through_uncounted_and_without_headers(limiter: Any) -> None:
+    def skip(context: KeyContext) -> bool:
+        return context.headers.get("x-internal") == "1"
+
+    client = _app(
+        rate_limit(_fresh(limiter), key=lambda _: "k", on_missing_key="reject", skip=skip)
+    )
+    for _ in range(3):
+        response = client.get("/", headers={"x-internal": "1"})
+        assert response.status_code == 200
+        assert "ratelimit" not in response.headers
+    # Nothing was counted: the budget of one is still there.
+    assert client.get("/").status_code == 200
+    assert client.get("/").status_code == 429
+    assert client.get("/", headers={"x-internal": "1"}).status_code == 200
+
+
+def test_skip_runs_before_the_key() -> None:
+    def key(context: KeyContext) -> str | None:
+        raise AssertionError("the key must not be asked for a skipped request")
+
+    limiter = Limiter(**POLICY, store=MemoryStore())
+    client = _app(rate_limit(limiter, key=key, on_missing_key="reject", skip=lambda _: True))
+    assert client.get("/").status_code == 200
+
+
+def test_skip_may_be_async_with_an_async_limiter() -> None:
+    async def skip(context: KeyContext) -> bool:
+        return context.headers.get("x-internal") == "1"
+
+    limiter = AsyncLimiter(**POLICY, store=MemoryStore())
+    client = _app(rate_limit(limiter, key=lambda _: "k", on_missing_key="reject", skip=skip))
+    assert client.get("/", headers={"x-internal": "1"}).status_code == 200
+    assert client.get("/").status_code == 200
+    assert client.get("/").status_code == 429
+
+
+def test_an_async_skip_needs_an_async_limiter() -> None:
+    async def skip(context: KeyContext) -> bool:
+        return True
+
+    limiter = Limiter(**POLICY, store=MemoryStore())
+    client = _app(rate_limit(limiter, key=lambda _: "k", on_missing_key="reject", skip=skip))
+    with pytest.raises(TypeError, match="AsyncLimiter"):
+        client.get("/")
+
+
 def test_peer_key_uses_the_connection() -> None:
     limiter = Limiter(**POLICY, store=MemoryStore())
     client = _app(rate_limit(limiter, key=ip_key(use_peer=True), on_missing_key="reject"))

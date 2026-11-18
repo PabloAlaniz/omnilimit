@@ -14,4 +14,6 @@ contract: one behaviour across ports, verified by vectors from the independent g
 | Cold-start aware timeouts | The first call to a new Durable Object can take over a second, longer than the 1 s default, so a `closed` limit answers 503 right after a deploy | A per-store default timeout (higher for Durable Objects), documented next to `onStoreError` |
 | Penalties | Repeat offenders wait longer | Escalating windows on top of peek and reset, if it can be specified without floats |
 
+Done since 0.2: `omnilimit/web` for any Fetch API `Request`, a limiter resolved per request, `skip`, `clientKey` and a clock for the memory store.
+
 Done in 0.2: `peek` and `reset` (lockouts that count only failures), and `onDenied` in every adapter.

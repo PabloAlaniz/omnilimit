@@ -21,6 +21,8 @@
     "hono",
     "express",
     "nextjs",
+    "astro",
+    "sveltekit",
     "cloudflare-workers",
     "x-forwarded-for"
   ],
@@ -98,6 +100,16 @@
         "default": "./dist/cloudflare-do.cjs"
       }
     },
+    "./web": {
+      "import": {
+        "types": "./dist/web.d.ts",
+        "default": "./dist/web.js"
+      },
+      "require": {
+        "types": "./dist/web.d.cts",
+        "default": "./dist/web.cjs"
+      }
+    },
     "./hono": {
       "import": {
         "types": "./dist/hono.d.ts",
@@ -146,6 +158,9 @@
       ],
       "cloudflare/do": [
         "dist/cloudflare-do.d.ts"
+      ],
+      "web": [
+        "dist/web.d.ts"
       ],
       "hono": [
         "dist/hono.d.ts"

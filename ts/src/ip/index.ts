@@ -143,6 +143,17 @@ export function maskIp(ip: string, prefix: number): string | null {
   return formatIpv6(masked);
 }
 
+/**
+ * The bucket id for a client: its trusted IP with IPv6 grouped by prefix, or `null` when the
+ * configured source has no valid address. It is `resolveClientIp` followed by `maskIp`, which
+ * is what a hand-written key function needs: `clientKey(input, options) ?? 'shared'`.
+ */
+export function clientKey(input: IpInput, options: IpStrategy & { ipv6Prefix?: number }): string | null {
+  const { ipv6Prefix = 64, ...strategy } = options;
+  const ip = resolveClientIp(input, strategy as IpStrategy);
+  return ip === null ? null : maskIp(ip, ipv6Prefix);
+}
+
 function fromXff(value: string | null, hops: number): string | null {
   if (value === null) return null;
   const entries = value.split(',').map((entry) => entry.trim());

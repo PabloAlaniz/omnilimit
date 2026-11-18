@@ -2,6 +2,7 @@
 
 Rate limiting that behaves the same across stacks, and proves it.
 
+- [Adapters](adapters.md)
 - [Stores](stores.md)
 - [Client IP](client-ip.md)
 - [Conformance matrix](matrix.md)

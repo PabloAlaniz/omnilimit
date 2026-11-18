@@ -91,6 +91,12 @@ limit = Depends(rate_limit(limiter, key=..., on_missing_key="reject", on_denied=
 
 With an `AsyncLimiter`, `on_denied` may be `async`.
 
+To let some requests through without counting them, pass `skip`. It runs before `key`:
+
+```python
+Depends(rate_limit(limiter, key=..., on_missing_key="shared", skip=lambda ctx: ctx.request.url.path == "/health"))
+```
+
 ## Client IP only
 
 `omnilimit.ip` uses only the standard library and also works next to `slowapi`:
@@ -100,6 +106,8 @@ from omnilimit.ip import resolve_client_ip
 
 ip = resolve_client_ip(request.headers, request.client.host, preset="cloud-run-lb")
 ```
+
+`client_key` takes the same arguments and also groups IPv6 by /64, which is the id a hand-written key wants: `client_key(request.headers, preset="cloudflare") or "shared"`.
 
 It returns `None` rather than guessing. Check that the preset matches your deployment: see [client IP](https://github.com/PabloAlaniz/omnilimit/blob/main/docs/client-ip.md).
 

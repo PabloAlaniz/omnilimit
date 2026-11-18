@@ -1,5 +1,5 @@
 import type { Decision, Limiter } from '../core/types.js';
-import { maskIp, resolveClientIp, type HeaderSource, type IpStrategy } from '../ip/index.js';
+import { clientKey, type HeaderSource, type IpStrategy } from '../ip/index.js';
 
 export interface KeyContext {
   headers: HeaderSource;
@@ -17,11 +17,23 @@ export type MissingKeyPolicy =
   /** Reject with a 400. */
   | 'reject';
 
+/** A limiter, or a function that finds it for each request. */
+export type LimiterSource<C extends KeyContext = KeyContext> = Limiter | ((context: C) => Limiter | Promise<Limiter>);
+
 export interface RateLimitOptions<C extends KeyContext = KeyContext> {
-  limiter: Limiter;
+  /**
+   * The limiter. Pass a function when it can only be built inside the request, as with a
+   * Workers binding that lives in `env`. Cache what it returns: it runs on every request.
+   */
+  limiter: LimiterSource<C>;
   key: KeyFn<C>;
   /** What to do when `key` returns `null`. Required so a misconfigured proxy cannot pass unnoticed. */
   onMissingKey: MissingKeyPolicy;
+  /**
+   * Return `true` to let a request through without counting it: a health check, a test
+   * environment, a feature flag. It runs before `key` and the limiter, and no headers are sent.
+   */
+  skip?: (context: C) => boolean | Promise<boolean>;
 }
 
 export type IpKeyOptions = IpStrategy & {
@@ -31,11 +43,7 @@ export type IpKeyOptions = IpStrategy & {
 
 /** Key requests by trusted client IP. */
 export function ipKey(options: IpKeyOptions): KeyFn {
-  const { ipv6Prefix = 64, ...strategy } = options;
-  return ({ headers, peer }) => {
-    const ip = resolveClientIp({ headers, peer }, strategy as IpStrategy);
-    return ip === null ? null : maskIp(ip, ipv6Prefix);
-  };
+  return ({ headers, peer }) => clientKey({ headers, peer }, options);
 }
 
 const SHARED_ID = '__omnilimit_shared__';
@@ -54,16 +62,17 @@ export interface Denial {
 export type Outcome = { kind: 'pass'; headers: Record<string, string> } | ({ kind: 'deny' } & Denial);
 
 export async function evaluate<C extends KeyContext>(options: RateLimitOptions<C>, context: C): Promise<Outcome> {
-  const { limiter, key, onMissingKey } = options;
+  const { key, onMissingKey, skip } = options;
+  if (skip && (await skip(context))) return { kind: 'pass', headers: {} };
   const id = await key(context);
   if (id === null) {
     if (onMissingKey === 'skip') return { kind: 'pass', headers: {} };
     if (onMissingKey === 'reject') {
       return { kind: 'deny', status: 400, headers: {}, error: 'client_not_identified', decision: null };
     }
-    return toOutcome(await limiter.check(SHARED_ID));
   }
-  return toOutcome(await limiter.check(id));
+  const limiter = typeof options.limiter === 'function' ? await options.limiter(context) : options.limiter;
+  return toOutcome(await limiter.check(id ?? SHARED_ID));
 }
 
 function toOutcome(decision: Decision): Outcome {

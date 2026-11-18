@@ -6,12 +6,12 @@ import {
   type IpKeyOptions,
   type KeyContext,
   type KeyFn,
+  type LimiterSource,
   type MissingKeyPolicy,
 } from './shared.js';
-import type { Limiter } from '../core/types.js';
 
 export { ipKey };
-export type { Denial, IpKeyOptions, KeyContext, KeyFn, MissingKeyPolicy };
+export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy };
 
 /** The parts of Express's request and response this adapter touches. */
 export interface ExpressRequestLike {
@@ -29,9 +29,12 @@ export interface ExpressKeyContext extends KeyContext {
 }
 
 export interface ExpressRateLimitOptions<Req extends ExpressRequestLike = ExpressRequestLike, Res extends ExpressResponseLike = ExpressResponseLike> {
-  limiter: Limiter;
+  /** The limiter, or a function that finds it for each request. */
+  limiter: LimiterSource<ExpressKeyContext & { req: Req }>;
   key: KeyFn<ExpressKeyContext & { req: Req }>;
   onMissingKey: MissingKeyPolicy;
+  /** Return `true` to let a request through without counting it. */
+  skip?: (context: ExpressKeyContext & { req: Req }) => boolean | Promise<boolean>;
   /**
    * Answer a denied request yourself, for example in your API's error format. The denial headers
    * are already set on `res`. If it throws, the error goes to `next`. Defaults to
