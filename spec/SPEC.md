@@ -38,6 +38,19 @@ retry_after_ms = ceil((lvl + W - C) / L)     denied only
 - Denials never write, so a retry storm cannot extend the wait.
 - `t = max(now, ts)` means a clock moving backwards never refunds quota.
 
+**Cost.** A request may weigh `k` units instead of one, such as a batch of `k` items. It adds
+`k * W` where the formulas above add `W`, in the condition, in the level and in the wait:
+
+```text
+if lvl + k*W <= C:   level = lvl + k*W; ...
+retry_after_ms = ceil((lvl + k*W - C) / L)     denied only
+```
+
+`remaining` is still counted in single units, and a denial still writes nothing. `k` must be an
+integer from 1 to `B`: a larger cost could never be allowed, so it is an error and not a
+denial. Stores need nothing new for this: they receive `k * W` in place of `W`. A store of
+tier `approximate` only counts requests, so it accepts no cost other than 1.
+
 **Peak rate.** This is a rate, not a counter that resets. `5` per minute with burst 5 can admit
 `B + L - 1 = 9` requests in one minute. If you need fewer, lower `burst`.
 
@@ -68,6 +81,8 @@ t     = max(now, ts)
 lvl   = max(0, level - min(t - ts, drain) * L)
 allowed = lvl + W <= C;    level reported = lvl;    ts reported = stored ts (now if absent)
 ```
+
+A peek takes a cost like a hit does, and then `allowed = lvl + k*W <= C`.
 
 The public values use the formulas above with `level = lvl`. When allowed, `remaining` therefore
 counts the request being asked about, and the effective window is `reset_ms`. A denied peek
@@ -199,6 +214,6 @@ The effective window is the retry time when denied, the time until the next unit
 | `ip` | Client IP strategies, canonical form and masking |
 | `failure` | Each fault with each failure mode |
 | `concurrency` | 200 simultaneous hits allow exactly `burst` |
-| `contract` | Policy and scope validation, the policy shorthand, and the approximate decision shape |
+| `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
 
 Changing the meaning of a vector requires a new spec version.

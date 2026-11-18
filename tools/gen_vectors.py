@@ -43,7 +43,9 @@ class Meter:
         self.ts: int | None = None
         self.exact = Fraction(0)
 
-    def hit(self, now: int) -> dict:
+    def hit(self, now: int, cost: int = 1) -> dict:
+        assert 1 <= cost <= self.burst, "a cost above the burst can never pass: it is an error, not a step"
+        amount = cost * self.window
         ts = now if self.ts is None else self.ts
         t = max(now, ts)
         elapsed = min(t - ts, self.drain)
@@ -51,16 +53,16 @@ class Meter:
         rate = Fraction(self.limit, self.window)
         exact = max(Fraction(0), self.exact - elapsed * rate)
         assert Fraction(drained, self.window) == exact, "integer meter diverged from the rational model"
-        if drained + self.window <= self.capacity:
-            self.level, self.ts = drained + self.window, t
-            self.exact = exact + 1
+        if drained + amount <= self.capacity:
+            self.level, self.ts = drained + amount, t
+            self.exact = exact + cost
             allowed = True
             level = self.level
             retry = None
         else:
             allowed = False
             level = drained
-            retry = ceil_div(drained + self.window - self.capacity, self.limit)
+            retry = ceil_div(drained + amount - self.capacity, self.limit)
         remaining = (self.capacity - level) // self.window
         reset = ceil_div(level, self.limit)
         if not allowed:
@@ -78,13 +80,15 @@ class Meter:
             "effective_ms": effective,
         }
 
-    def peek(self, now: int) -> dict:
+    def peek(self, now: int, cost: int = 1) -> dict:
         """The decision a hit would get now. Nothing is written."""
+        assert 1 <= cost <= self.burst
+        amount = cost * self.window
         ts = now if self.ts is None else self.ts
         t = max(now, ts)
         drained = max(0, self.level - min(t - ts, self.drain) * self.limit)
-        allowed = drained + self.window <= self.capacity
-        retry = None if allowed else ceil_div(drained + self.window - self.capacity, self.limit)
+        allowed = drained + amount <= self.capacity
+        retry = None if allowed else ceil_div(drained + amount - self.capacity, self.limit)
         remaining = (self.capacity - drained) // self.window
         reset = ceil_div(drained, self.limit)
         # Allowed implies remaining >= 1, so the effective window is the reset time.
@@ -117,7 +121,8 @@ def headers(scope: str, limit: int, window_ms: int, r: dict) -> dict:
 
 
 def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list[tuple], scope: str = "t") -> dict:
-    """`moves` are `(at_ms, id)` hits, or `(at_ms, id, op)` with op `hit`, `peek` or `reset`."""
+    """`moves` are `(at_ms, id)` hits, or `(at_ms, id, op)` with op `hit`, `peek` or `reset`, or
+    `(at_ms, id, op, cost)` for a hit or peek that weighs more than one unit."""
     meters: dict[str, Meter] = {}
     steps = []
     for move in moves:
@@ -128,9 +133,13 @@ def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list
             meter.reset()
             steps.append({"at_ms": at, "id": who, "op": "reset"})
             continue
-        r = meter.peek(at) if op == "peek" else meter.hit(at)
-        # `op` is only written when it is not a hit, so version-1 vectors keep their bytes.
+        cost = move[3] if len(move) > 3 else 1
+        r = meter.peek(at, cost) if op == "peek" else meter.hit(at, cost)
+        # `op` and `cost` are only written when they are not the default, so earlier vectors
+        # keep their bytes.
         tag = {"op": op} if op != "hit" else {}
+        if cost != 1:
+            tag["cost"] = cost
         steps.append(
             {
                 "at_ms": at,
@@ -213,6 +222,34 @@ def sequences() -> dict[str, dict]:
     }
     for k, v in with_ops.items():
         out[f"sequence/{k}"] = sequence(f"sequence/{k}", *v)
+
+    h = "hit"
+    with_cost = {
+        "cost-spends-several-units": (10, 60_000, 10, [(b, a, h, 3), (b, a, h, 3), (b, a, h, 3), (b, a, h, 3), (b, a), (b, a)]),
+        "cost-equal-to-burst-needs-an-empty-meter": (5, 60_000, 5, [(b, a, h, 5), (b, a), (b + 12_000, a), (b + 12_000, a, h, 5), (b + 72_000, a, h, 5)]),
+        "cost-denied-reports-the-wait-for-the-whole-cost": (4, 4000, 4, [(b, a, h, 3), (b, a, h, 2), (b + 500, a, h, 2), (b + 1000, a, h, 2), (b + 1000, a)]),
+        "cost-denied-does-not-write": (3, 3000, 3, [(b, a, h, 2), (b, a, h, 2), (b, a), (b, a)]),
+        "cost-peek-does-not-consume": (6, 6000, 6, [(b, a, p, 4), (b, a, h, 4), (b, a, p, 4), (b, a, p, 2), (b, a, h, 2), (b, a, p)]),
+        "cost-with-burst-below-limit": (10, 10_000, 3, [(b, a, h, 3), (b, a), (b + 1000, a), (b + 3000, a, h, 3), (b + 3000, a, h, 2)]),
+        "cost-with-burst-above-limit": (2, 1000, 8, [(b, a, h, 8), (b + 500, a), (b + 500, a), (b + 4000, a, h, 8), (b + 4000, a, h, 7)]),
+        "cost-mixed-with-reset": (4, 60_000, 4, [(b, a, h, 4), (b, a, h, 2), (b + 1, a, r), (b + 2, a, h, 2), (b + 2, a, h, 2), (b + 2, a)]),
+        "cost-keeps-every-digit": (1, 123_456_789_012_345, 3, [(b, a, h, 2), (b, a, h, 2), (b + 1, a), (b + 1, a)]),
+    }
+    for k, v in with_cost.items():
+        out[f"sequence/{k}"] = sequence(f"sequence/{k}", *v)
+
+    rng = random.Random(20261118)
+    for n in range(20):
+        limit = rng.choice([2, 3, 5, 7, 10, 60, 997])
+        window = rng.choice([1000, 1009, 10_000, 60_000, 900_000])
+        burst = rng.choice([2, 3, limit, limit + 1, limit * 2])
+        at = BASE + rng.randrange(1000)
+        moves = []
+        for _ in range(rng.randrange(10, 40)):
+            at += rng.choice([0, 0, 1, 17, 333, 1000, window // limit, window // limit + 1, window])
+            cost = rng.choice([1, 1, 2, 3, burst, max(1, burst // 2), rng.randrange(1, burst + 1)])
+            moves.append((at, rng.choice("aab"), rng.choice([h, h, h, p, r]), min(cost, burst)))
+        out[f"sequence/cost-random-{n:03d}"] = sequence(f"sequence/cost-random-{n:03d}", limit, window, burst, moves)
 
     rng = random.Random(20261110)
     for n in range(20):
@@ -408,6 +445,24 @@ def contract() -> dict[str, dict]:
             "kind": "contract",
             "subject": "policy",
             "cases": [{"policy": p, "valid": v} for p, v in policies],
+        },
+        "contract/cost-validation": {
+            "spec": SPEC,
+            "id": "contract/cost-validation",
+            "kind": "contract",
+            "subject": "cost",
+            "policy": {"limit": 10, "window_ms": 60_000, "burst": 4},
+            "cases": [
+                {"cost": 1, "valid": True},
+                {"cost": 2, "valid": True},
+                {"cost": 4, "valid": True},
+                {"cost": 5, "valid": False},
+                {"cost": 10, "valid": False},
+                {"cost": 0, "valid": False},
+                {"cost": -1, "valid": False},
+                {"cost": 1.5, "valid": False},
+                {"cost": "2", "valid": False},
+            ],
         },
         "contract/scope-validation": {
             "spec": SPEC,

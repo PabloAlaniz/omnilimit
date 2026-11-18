@@ -130,11 +130,22 @@ class MeterView:
     effective_ms: int
 
 
-def view_of(allowed: bool, level: int, params: HitParams) -> MeterView:
-    """Derive the public numbers from a level."""
+def view_of(allowed: bool, level: int, params: HitParams, amount: int | None = None) -> MeterView:
+    """Derive the public numbers from a level.
+
+    `amount` is what the request added or tried to add: `window_ms` times its cost.
+    """
     remaining = (params.capacity - level) // params.window_ms
     reset_ms = ceil_div(level, params.limit)
-    next_unit_ms = ceil_div(max(0, level + params.window_ms - params.capacity), params.limit)
     if not allowed:
-        return MeterView(remaining, reset_ms, next_unit_ms, next_unit_ms)
+        added = params.window_ms if amount is None else amount
+        retry_after_ms = ceil_div(max(0, level + added - params.capacity), params.limit)
+        return MeterView(remaining, reset_ms, retry_after_ms, retry_after_ms)
+    next_unit_ms = ceil_div(max(0, level + params.window_ms - params.capacity), params.limit)
     return MeterView(remaining, reset_ms, None, next_unit_ms if remaining == 0 else reset_ms)
+
+
+def assert_cost(cost: object, policy: ResolvedPolicy) -> None:
+    """Validate a cost against a policy: an integer from 1 to the burst."""
+    if not _is_positive_int(cost) or cost > policy.burst:  # type: ignore[operator]
+        raise ValueError(f"omnilimit: cost must be an integer from 1 to the burst ({policy.burst})")

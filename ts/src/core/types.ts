@@ -99,15 +99,19 @@ export interface LimiterOptions extends Policy {
 export interface Limiter {
   readonly scope: string;
   readonly tier: Tier;
-  /** Count one request and decide. */
-  check(id: string, options?: { nowMs?: number }): Promise<Decision>;
+  /**
+   * Count one request and decide. `cost` makes it weigh several units, such as a batch of
+   * items: an integer from 1 to the burst, anything else throws a `RangeError`. A denied
+   * request counts nothing, whatever its cost.
+   */
+  check(id: string, options?: { nowMs?: number; cost?: number }): Promise<Decision>;
   /**
    * The decision `check` would give now, without counting. When allowed, `remaining` includes
    * the request you asked about. Advisory: a concurrent request can take the last unit, so
    * the `check` that follows is still the authority. Throws a `TypeError` if the store cannot
    * peek (approximate stores); store failures follow `onStoreError` like `check`.
    */
-  peek(id: string, options?: { nowMs?: number }): Promise<Decision>;
+  peek(id: string, options?: { nowMs?: number; cost?: number }): Promise<Decision>;
   /**
    * Forget everything counted for `id`. Resolves `true` once deleted and `false` if the store
    * failed or timed out (reported through `onEvent`); it never rejects for a store failure.

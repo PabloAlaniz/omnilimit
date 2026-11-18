@@ -101,15 +101,25 @@ export interface MeterView {
   effectiveMs: number;
 }
 
-/** Derive the public numbers from a level. All port divisions live here. */
-export function viewOf(allowed: boolean, level: number, params: HitParams): MeterView {
+/**
+ * Derive the public numbers from a level. All port divisions live here. `amount` is what the
+ * request added or tried to add: `windowMs` times its cost.
+ */
+export function viewOf(allowed: boolean, level: number, params: HitParams, amount: number = params.windowMs): MeterView {
   const { capacity, windowMs, limit } = params;
   const remaining = Math.floor((capacity - level) / windowMs);
   const resetMs = ceilDiv(level, limit);
   if (!allowed) {
-    const retryAfterMs = ceilDiv(level + windowMs - capacity, limit);
+    const retryAfterMs = ceilDiv(level + amount - capacity, limit);
     return { remaining, resetMs, retryAfterMs, effectiveMs: retryAfterMs };
   }
   const effectiveMs = remaining === 0 ? ceilDiv(level + windowMs - capacity, limit) : resetMs;
   return { remaining, resetMs, retryAfterMs: null, effectiveMs };
+}
+
+/** Validate a cost against a policy. Throws on anything but an integer from 1 to the burst. */
+export function assertCost(cost: unknown, policy: ResolvedPolicy): asserts cost is number {
+  if (!isPositiveInt(cost) || cost > policy.burst) {
+    throw new RangeError(`omnilimit: cost must be an integer from 1 to the burst (${policy.burst})`);
+  }
 }

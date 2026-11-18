@@ -8,11 +8,11 @@ Pick the tool that fits. These notes come from each project's public documentati
 | [hono-rate-limiter](https://github.com/rhinobase/hono-rate-limiter) | Hono | You only run Hono and want its store ecosystem |
 | [@upstash/ratelimit](https://github.com/upstash/ratelimit-js) | TypeScript, with a Python sibling | You use Upstash Redis |
 | [slowapi](https://github.com/laurentS/slowapi), [limits](https://github.com/alisaifee/limits) | Python | You only run Python and want their maturity and wider store support |
-| [Halt](https://github.com/Surafeljava/halt) | TypeScript and Python | You need its per-plan quotas or weighted endpoints |
+| [Halt](https://github.com/Surafeljava/halt) | TypeScript and Python | You need its per-plan quotas |
 | [ThrottleKit](https://www.npmjs.com/package/throttlekit) | TypeScript | You want a formally bounded overshoot on TypeScript |
 
 Pick omnilimit when you want one behaviour across frameworks and stores, verified on every commit, with client IP handling and store failure as part of the contract.
 
-It has a narrower scope on purpose. It has one algorithm, and no quotas per plan or weighted costs. Lockouts that count only failures and several limits on one request are [recipes](recipes.md) built from `peek`, `check` and `reset`; there is no ban list or escalating penalty. See the [roadmap](roadmap.md) for what may come next.
+It has a narrower scope on purpose. It has one algorithm, and no quotas per plan or per calendar period. Lockouts that count only failures and several limits on one request are [recipes](recipes.md) built from `peek`, `check` and `reset`; there is no ban list or escalating penalty. See the [roadmap](roadmap.md) for what may come next.
 
 `omnilimit/ip` is independent, so you can use it with any of the libraries above.

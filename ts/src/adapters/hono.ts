@@ -32,6 +32,8 @@ export interface HonoRateLimitOptions<C extends HonoContextLike = HonoContextLik
   onMissingKey: MissingKeyPolicy;
   /** Return `true` to let a request through without counting it. */
   skip?: (context: HonoKeyContext & { c: C }) => boolean | Promise<boolean>;
+  /** How many units this request weighs, from 1 to the limiter's burst. Defaults to 1. */
+  cost?: (context: HonoKeyContext & { c: C }) => number | Promise<number>;
   /** How to read the TCP peer. By default uses `@hono/node-server`'s `env.incoming` when present. */
   peer?: (c: C) => string | null | undefined;
   /**

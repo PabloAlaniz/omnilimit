@@ -10,7 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const hasStores = Boolean(process.env.OMNILIMIT_TEST_REDIS_URLS && process.env.OMNILIMIT_TEST_POSTGRES_URLS);
 
 const core = [
-  ['retry-after rounds down', 'ts/src/core/gcra.ts', 'const retryAfterMs = ceilDiv(level + windowMs - capacity, limit);', 'const retryAfterMs = Math.floor((level + windowMs - capacity) / limit);'],
+  ['retry-after rounds down', 'ts/src/core/gcra.ts', 'const retryAfterMs = ceilDiv(level + amount - capacity, limit);', 'const retryAfterMs = Math.floor((level + amount - capacity) / limit);'],
   ['drain is not capped', 'ts/src/core/gcra.ts', 'const elapsed = Math.min(t - ts, params.drainMs);', 'const elapsed = t - ts;\n  if (elapsed > params.drainMs) return { hit: { allowed: true, level: params.windowMs + 1, ts: t }, write: { level: params.windowMs + 1, ts: t } };'],
   ['clock regression refunds quota', 'ts/src/core/gcra.ts', 'const t = Math.max(nowMs, ts);', 'const t = nowMs;'],
   ['capacity check is off by one', 'ts/src/core/gcra.ts', 'if (drained + params.windowMs > params.capacity) {', 'if (drained + params.windowMs >= params.capacity) {'],
@@ -22,10 +22,13 @@ const core = [
   ['store timeout never fires', 'ts/src/core/limiter.ts', 'return await Promise.race([work, timeout]);', 'void timeout.catch(() => {}); return await Promise.race([work, new Promise<T>(() => {}), Promise.resolve().then(() => work)]);'],
   ['shorthand accepts plurals', 'ts/src/core/gcra.ts', '(second|minute|hour|day)$/;', '(second|minute|hour|day)s?$/;'],
   ['shorthand accepts a leading zero', 'ts/src/core/gcra.ts', "/^([1-9][0-9]{0,14})\\/", "/^([0-9]{1,15})\\/"],
-  ['checkAll counts before looking', 'ts/src/core/recipes.ts', 'peeks.push(await limiter.peek(id));', 'peeks.push(await limiter.check(id));'],
+  ['checkAll counts before looking', 'ts/src/core/recipes.ts', 'peeks.push(await limiter.peek(id, options(cost)));', 'peeks.push(await limiter.check(id, options(cost)));'],
   ['checkAll answers with the shortest wait', 'ts/src/core/recipes.ts', '(decision.retryAfterMs ?? 0) > (governing.retryAfterMs ?? 0)', '(decision.retryAfterMs ?? 0) < (governing.retryAfterMs ?? 0)'],
   ['lockout counts successes', 'ts/src/core/recipes.ts', 'if (resetOnSuccess) await limiter.reset(id);', 'await limiter.check(id);'],
   ['lockout verifies while locked', 'ts/src/core/recipes.ts', 'if (!gate.allowed) return { allowed: false, verified: null, decision: gate };', ''],
+  ['cost is ignored', 'ts/src/core/limiter.ts', 'return { limit, windowMs: windowMs * cost, capacity, drainMs };', 'return { limit, windowMs, capacity, drainMs };'],
+  ['cost above the burst is accepted', 'ts/src/core/gcra.ts', 'if (!isPositiveInt(cost) || cost > policy.burst) {', 'if (!isPositiveInt(cost)) {'],
+  ['a denied cost reports the wait for one unit', 'ts/src/core/gcra.ts', 'const retryAfterMs = ceilDiv(level + amount - capacity, limit);', 'const retryAfterMs = ceilDiv(level + windowMs - capacity, limit);'],
   ['key ignores the salt', 'ts/src/core/key.ts', 'const saltBytes = encoder.encode(salt);', "const saltBytes = encoder.encode('');"],
   ['key has no separator', 'ts/src/core/key.ts', 'input.set(idBytes, saltBytes.length + 1);', 'input.set(idBytes, saltBytes.length);'],
   ['retry-after header dropped', 'ts/src/core/headers.ts', "out['retry-after'] = String(toSeconds(decision.retryAfterMs));", ''],
@@ -33,7 +36,7 @@ const core = [
   ['peek uses the request clock as ts', 'ts/src/core/gcra.ts', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts: t };'],
   ['memory peek consumes quota', 'ts/src/stores/memory.ts', 'return applyPeek(entries.get(key) ?? null, params, nowMs ?? clock());', 'const r = applyHit(entries.get(key) ?? null, params, nowMs ?? clock()); if (r.write) entries.set(key, { ...r.write, expiresAt: 0 }); return applyPeek(entries.get(key) ?? null, params, nowMs ?? clock());'],
   ['memory reset does not delete', 'ts/src/stores/memory.ts', '      entries.delete(key);\n    },\n  };', '      void key;\n    },\n  };'],
-  ['peek counts like check', 'ts/src/core/limiter.ts', "return decide('peek', () => peekFn(key, policy, peekOptions?.nowMs));", "return decide('peek', () => store.hit(key, policy, peekOptions?.nowMs));"],
+  ['peek counts like check', 'ts/src/core/limiter.ts', "return decide('peek', params.windowMs, () => peekFn(key, params, peekOptions?.nowMs));", "return decide('peek', params.windowMs, () => store.hit(key, params, peekOptions?.nowMs));"],
   ['failed reset reports success', 'ts/src/core/limiter.ts', "        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });\n        return false;", "        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });\n        return true;"],
 ];
 

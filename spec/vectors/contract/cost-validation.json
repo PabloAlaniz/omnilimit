@@ -1,0 +1,49 @@
+{
+ "spec": "1",
+ "id": "contract/cost-validation",
+ "kind": "contract",
+ "subject": "cost",
+ "policy": {
+  "limit": 10,
+  "window_ms": 60000,
+  "burst": 4
+ },
+ "cases": [
+  {
+   "cost": 1,
+   "valid": true
+  },
+  {
+   "cost": 2,
+   "valid": true
+  },
+  {
+   "cost": 4,
+   "valid": true
+  },
+  {
+   "cost": 5,
+   "valid": false
+  },
+  {
+   "cost": 10,
+   "valid": false
+  },
+  {
+   "cost": 0,
+   "valid": false
+  },
+  {
+   "cost": -1,
+   "valid": false
+  },
+  {
+   "cost": 1.5,
+   "valid": false
+  },
+  {
+   "cost": "2",
+   "valid": false
+  }
+ ]
+}

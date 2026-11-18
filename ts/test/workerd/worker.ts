@@ -35,10 +35,10 @@ export default {
     if (body.op === 'sequence') {
       const limiter = createLimiter(options(body['policy'] as never, body['salt'] as string));
       const out = [];
-      for (const step of body['steps'] as Array<{ id: string; at_ms: number; op?: 'peek' | 'reset' }>) {
+      for (const step of body['steps'] as Array<{ id: string; at_ms: number; op?: 'peek' | 'reset'; cost?: number }>) {
         if (step.op === 'reset') out.push({ reset: await limiter.reset(step.id) });
-        else if (step.op === 'peek') out.push(await limiter.peek(step.id, { nowMs: step.at_ms }));
-        else out.push(await limiter.check(step.id, { nowMs: step.at_ms }));
+        else if (step.op === 'peek') out.push(await limiter.peek(step.id, { nowMs: step.at_ms, cost: step.cost ?? 1 }));
+        else out.push(await limiter.check(step.id, { nowMs: step.at_ms, cost: step.cost ?? 1 }));
       }
       return Response.json(out);
     }

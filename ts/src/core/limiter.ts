@@ -1,7 +1,7 @@
-import { assertScope, resolvePolicy, viewOf } from './gcra.js';
+import { assertCost, assertScope, resolvePolicy, viewOf } from './gcra.js';
 import { buildHeaders } from './headers.js';
 import { deriveKey } from './key.js';
-import type { Decision, HeaderInput, Limiter, LimiterEvent, LimiterOptions, RawHit } from './types.js';
+import type { Decision, HeaderInput, HitParams, Limiter, LimiterEvent, LimiterOptions, RawHit } from './types.js';
 
 const DEFAULT_STORE_TIMEOUT_MS = 1000;
 const STORE_ERROR_RETRY_MS = 1000;
@@ -42,7 +42,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
     return { ...decision, headers: built };
   };
 
-  const fromHit = (hit: RawHit): Decision => {
+  const fromHit = (hit: RawHit, amount: number): Decision => {
     const reason = hit.allowed ? 'ok' : 'limited';
     const status = hit.allowed ? null : 429;
     if (hit.level === null) {
@@ -52,7 +52,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
         retryAfterMs ?? 0,
       );
     }
-    const view = viewOf(hit.allowed, hit.level, policy);
+    const view = viewOf(hit.allowed, hit.level, policy, amount);
     return finish(
       {
         allowed: hit.allowed,
@@ -84,7 +84,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
     );
   };
 
-  const decide = async (op: 'check' | 'peek', run: () => Promise<RawHit>): Promise<Decision> => {
+  const decide = async (op: 'check' | 'peek', amount: number, run: () => Promise<RawHit>): Promise<Decision> => {
     let hit: RawHit;
     try {
       hit = await withTimeout(run(), storeTimeoutMs);
@@ -93,7 +93,21 @@ export function createLimiter(options: LimiterOptions): Limiter {
       return fromFailure();
     }
     emit({ type: hit.allowed ? 'allowed' : 'limited', op, scope, tier: store.tier });
-    return fromHit(hit);
+    return fromHit(hit, amount);
+  };
+
+  /**
+   * What the store receives for a request of this cost. Stores add `windowMs` per hit, so a
+   * request that weighs `cost` units is the same hit with `cost * windowMs` in its place.
+   */
+  const weighed = (cost: number | undefined): HitParams => {
+    if (cost === undefined || cost === 1) return policy;
+    assertCost(cost, policy);
+    if (store.tier === 'approximate') {
+      throw new TypeError('omnilimit: this store (tier approximate) only counts requests: it cannot weigh a cost');
+    }
+    const { limit, windowMs, capacity, drainMs } = policy;
+    return { limit, windowMs: windowMs * cost, capacity, drainMs };
   };
 
   const unsupported = (op: 'peek' | 'reset') =>
@@ -103,14 +117,16 @@ export function createLimiter(options: LimiterOptions): Limiter {
     scope,
     tier: store.tier,
     async check(id, checkOptions) {
+      const params = weighed(checkOptions?.cost);
       const key = await deriveKey(scope, policy, salt, id);
-      return decide('check', () => store.hit(key, policy, checkOptions?.nowMs));
+      return decide('check', params.windowMs, () => store.hit(key, params, checkOptions?.nowMs));
     },
     async peek(id, peekOptions) {
       const peekFn = store.peek?.bind(store);
       if (!peekFn) throw unsupported('peek');
+      const params = weighed(peekOptions?.cost);
       const key = await deriveKey(scope, policy, salt, id);
-      return decide('peek', () => peekFn(key, policy, peekOptions?.nowMs));
+      return decide('peek', params.windowMs, () => peekFn(key, params, peekOptions?.nowMs));
     },
     async reset(id) {
       const resetFn = store.reset?.bind(store);

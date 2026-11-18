@@ -34,6 +34,11 @@ export interface RateLimitOptions<C extends KeyContext = KeyContext> {
    * environment, a feature flag. It runs before `key` and the limiter, and no headers are sent.
    */
   skip?: (context: C) => boolean | Promise<boolean>;
+  /**
+   * How many units this request weighs: an integer from 1 to the limiter's burst. Use it for
+   * requests that do several things at once, such as a batch. Defaults to 1.
+   */
+  cost?: (context: C) => number | Promise<number>;
 }
 
 export type IpKeyOptions = IpStrategy & {
@@ -72,7 +77,8 @@ export async function evaluate<C extends KeyContext>(options: RateLimitOptions<C
     }
   }
   const limiter = typeof options.limiter === 'function' ? await options.limiter(context) : options.limiter;
-  return toOutcome(await limiter.check(id ?? SHARED_ID));
+  const cost = options.cost ? { cost: await options.cost(context) } : {};
+  return toOutcome(await limiter.check(id ?? SHARED_ID, cost));
 }
 
 function toOutcome(decision: Decision): Outcome {

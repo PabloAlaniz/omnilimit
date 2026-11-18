@@ -106,6 +106,34 @@ describe('contract vectors', () => {
     }
   });
 
+  it('validates costs', async () => {
+    const vector = bySubject('cost');
+    const limiter = createLimiter({ ...toPolicy(vector.policy), store: memoryStore(), scope: 'c', onStoreError: 'closed' });
+    expect(vector.cases.filter((c: Vector) => c.valid).length).toBeGreaterThan(2);
+    for (const c of vector.cases) {
+      const context = JSON.stringify(c);
+      if (c.valid) {
+        await expect(limiter.peek('x', { cost: c.cost }), context).resolves.toHaveProperty('allowed', true);
+        await expect(limiter.check(`x${c.cost}`, { cost: c.cost }), context).resolves.toHaveProperty('allowed', true);
+      } else {
+        await expect(limiter.check('x', { cost: c.cost }), context).rejects.toThrow(RangeError);
+        await expect(limiter.peek('x', { cost: c.cost }), context).rejects.toThrow(RangeError);
+      }
+    }
+  });
+
+  it('refuses a cost on a store that only counts requests', async () => {
+    const limiter = createLimiter({
+      limit: 5,
+      windowMs: 60_000,
+      store: cloudflareBindingStore({ binding: { limit: async () => ({ success: true }) }, periodSec: 60 }),
+      scope: 'a',
+      onStoreError: 'closed',
+    });
+    await expect(limiter.check('x', { cost: 2 })).rejects.toThrow(TypeError);
+    expect((await limiter.check('x', { cost: 1 })).allowed).toBe(true);
+  });
+
   it('reads the policy shorthand', () => {
     const { cases } = bySubject('shorthand');
     expect(cases.length).toBeGreaterThan(30);

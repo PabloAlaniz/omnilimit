@@ -35,6 +35,8 @@ if not decision.allowed:
 
 `5` per minute with burst 5 can admit 9 requests in one minute: this is a rate, not a counter that resets. Lower `burst` if you need fewer.
 
+A request can weigh several units, such as a batch: `limiter.check(user_id, cost=len(items))`. The cost is an integer from 1 to the burst, and a denied request counts nothing.
+
 To read the policy from configuration, `parse_policy("10/minute")` returns `limit` and `window_ms` ready to spread: `Limiter(**parse_policy(setting), store=..., scope=..., on_store_error=...)`. The grammar is `<limit>/<count><unit>` with `second`, `minute`, `hour` or `day`, and it is strict: `5/15minute` is valid, `10/min` is not.
 
 ## Peek and reset

@@ -33,6 +33,7 @@ from omnilimit._types import Decision
 from omnilimit.ip import IpPreset, client_key
 
 __all__ = [
+    "CostFn",
     "Denial",
     "DenialError",
     "KeyContext",
@@ -81,6 +82,9 @@ KeyFn = Callable[[KeyContext], "Awaitable[str | None] | str | None"]
 
 LimiterFn = Callable[[KeyContext], "Awaitable[Limiter | AsyncLimiter] | Limiter | AsyncLimiter"]
 """Finds the limiter for a request, for example one per plan. It runs on every request."""
+
+CostFn = Callable[[KeyContext], "Awaitable[int] | int"]
+"""Returns how many units the request weighs, from 1 to the limiter's burst."""
 
 SkipFn = Callable[[KeyContext], "Awaitable[bool] | bool"]
 """Returns `True` to let the request through without counting it."""
@@ -174,6 +178,7 @@ def rate_limit(
     on_denied: OnDenied | None = None,
     skip: SkipFn | None = None,
     identity: Callable[..., Any] | None = None,
+    cost: CostFn | None = None,
 ) -> Callable[..., Any]:
     """Build a dependency: `Depends(rate_limit(limiter, key=..., on_missing_key=...))`.
 
@@ -187,6 +192,9 @@ def rate_limit(
     key by user or API key without resolving them twice. If it raises, no request is counted.
 
     `limiter` may be a function of the context instead of a limiter, to pick one per request.
+
+    `cost` returns how many units the request weighs, for requests that do several things at
+    once, such as a batch. It defaults to 1.
     """
     check_policy(on_missing_key)
 
@@ -213,16 +221,20 @@ def rate_limit(
                 raise await deny_async(request, target)
             if target is None:
                 return
+            weight = 1
+            if cost is not None:
+                weighed = cost(context)
+                weight = await weighed if inspect.isawaitable(weighed) else weighed
             if isinstance(source, AsyncLimiter):
-                decision = await source.check(target)
+                decision = await source.check(target, cost=weight)
             else:
                 found: Any = source(context)
                 active = await found if inspect.isawaitable(found) else found
                 if isinstance(active, AsyncLimiter):
-                    decision = await active.check(target)
+                    decision = await active.check(target, cost=weight)
                 else:
                     # A blocking limiter chosen per request: keep it off the event loop.
-                    decision = await run_in_threadpool(active.check, target)
+                    decision = await run_in_threadpool(active.check, target, cost=weight)
             if not decision.allowed:
                 raise await deny_async(request, _denial(decision))
             _pass(decision, response)
@@ -259,7 +271,11 @@ def rate_limit(
             raise deny(request, target)
         if target is None:
             return
-        decision = blocking.check(target)
+        weight: Any = 1 if cost is None else cost(context)
+        if inspect.iscoroutine(weight):
+            weight.close()
+            raise TypeError("omnilimit: an async cost function needs an AsyncLimiter")
+        decision = blocking.check(target, cost=weight)
         if not decision.allowed:
             raise deny(request, _denial(decision))
         _pass(decision, response)

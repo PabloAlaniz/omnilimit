@@ -34,6 +34,8 @@ The result has `allowed`, the `decision` to answer with, and all the `decisions`
 - **Denied:** `decision` is the denial with the longest wait, so its `Retry-After` is the one that is true for the request.
 - **Allowed:** `decision` is the one with the fewest units left, so the headers describe the limit the client will hit first.
 
+An entry can carry a cost, the units the request weighs under that limit: `{ limiter, id, cost: 6 }`, or `(limiter, id, 6)` in Python.
+
 ### It is not atomic
 
 A peek is advisory. Two requests racing for the last unit of one limit can both pass step 1; in step 2 the second is denied, and the limits listed before that one stay counted for it. Put the limit most likely to deny first to keep that small. An atomic version needs one store call over several keys, which is on the [roadmap](roadmap.md).

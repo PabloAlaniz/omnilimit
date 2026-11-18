@@ -59,6 +59,25 @@ def test_counts_nothing_when_one_would_deny() -> None:
     assert user.peek("u").remaining == 5
 
 
+def test_weighs_each_limit_by_its_own_cost() -> None:
+    ip, user, _ = _pair(10, 10)
+    first = check_all([(ip, "a"), (user, "u", 6)])
+    assert [d.remaining for d in first.decisions] == [9, 4]
+    second = check_all([(ip, "a"), (user, "u", 6)])
+    assert not second.allowed
+    assert ip.peek("a").remaining == 9
+
+
+def test_weighs_each_limit_by_its_own_cost_async() -> None:
+    async def run() -> None:
+        ip, user, _ = _pair(10, 10, AsyncLimiter)
+        first = await check_all_async([(ip, "a"), (user, "u", 6)])
+        assert [d.remaining for d in first.decisions] == [9, 4]
+        assert not (await check_all_async([(ip, "a"), (user, "u", 6)])).allowed
+
+    asyncio.run(run())
+
+
 def test_answers_with_the_longest_wait() -> None:
     ip, user, clock = _pair(1, 1)
     ip.check("a")

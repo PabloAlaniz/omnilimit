@@ -54,21 +54,29 @@ def _needs_entries(entries: Sequence[object]) -> None:
         raise ValueError("omnilimit: check_all needs at least one limit")
 
 
-def check_all(entries: Sequence[tuple[Limiter, str]]) -> CombinedDecision:
+def _cost(entry: tuple[object, ...]) -> int:
+    return entry[2] if len(entry) > 2 else 1  # type: ignore[return-value]
+
+
+def check_all(
+    entries: Sequence[tuple[Limiter, str] | tuple[Limiter, str, int]],
+) -> CombinedDecision:
     """Apply several limits to one request, such as per IP and per account, so that a request
     one of them denies does not use up the others.
 
     It peeks every `(limiter, id)` first and counts only when all of them would allow. The peek
     is advisory: two requests racing for the last unit can both pass it, and then the second is
     denied while counting, with the limits before it already counted. Needs stores that can peek.
+
+    An entry may carry a third value, the cost of the request under that limit.
     """
     _needs_entries(entries)
-    refusal = _refusal([limiter.peek(id_value) for limiter, id_value in entries])
+    refusal = _refusal([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])
     if refusal is not None:
         return refusal
     decisions: list[Decision] = []
-    for limiter, id_value in entries:
-        decision = limiter.check(id_value)
+    for entry in entries:
+        decision = entry[0].check(entry[1], cost=_cost(entry))
         decisions.append(decision)
         if not decision.allowed:
             return CombinedDecision(allowed=False, decision=decision, decisions=tuple(decisions))
@@ -77,15 +85,17 @@ def check_all(entries: Sequence[tuple[Limiter, str]]) -> CombinedDecision:
     )
 
 
-async def check_all_async(entries: Sequence[tuple[AsyncLimiter, str]]) -> CombinedDecision:
+async def check_all_async(
+    entries: Sequence[tuple[AsyncLimiter, str] | tuple[AsyncLimiter, str, int]],
+) -> CombinedDecision:
     """`check_all` for `AsyncLimiter`."""
     _needs_entries(entries)
-    refusal = _refusal([await limiter.peek(id_value) for limiter, id_value in entries])
+    refusal = _refusal([await entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])
     if refusal is not None:
         return refusal
     decisions: list[Decision] = []
-    for limiter, id_value in entries:
-        decision = await limiter.check(id_value)
+    for entry in entries:
+        decision = await entry[0].check(entry[1], cost=_cost(entry))
         decisions.append(decision)
         if not decision.allowed:
             return CombinedDecision(allowed=False, decision=decision, decisions=tuple(decisions))
