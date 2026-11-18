@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { Ajv } from 'ajv';
 import { describe, expect, it } from 'vitest';
 import { memoryStore } from '../../src/stores/memory.js';
-import { assertScope, resolvePolicy } from '../../src/core/gcra.js';
+import { assertScope, parsePolicy, resolvePolicy } from '../../src/core/gcra.js';
 import { deriveKey } from '../../src/core/key.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
@@ -104,6 +104,16 @@ describe('contract vectors', () => {
       if (c.valid) expect(run, JSON.stringify(c)).not.toThrow();
       else expect(run, JSON.stringify(c)).toThrow(RangeError);
     }
+  });
+
+  it('reads the policy shorthand', () => {
+    const { cases } = bySubject('shorthand');
+    expect(cases.length).toBeGreaterThan(30);
+    for (const c of cases) {
+      if (c.policy) expect(parsePolicy(c.text), c.text).toEqual(toPolicy(c.policy));
+      else expect(() => parsePolicy(c.text), JSON.stringify(c.text)).toThrow(RangeError);
+    }
+    expect(() => parsePolicy(10 as never)).toThrow(RangeError);
   });
 
   it('validates scopes', () => {

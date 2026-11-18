@@ -35,6 +35,8 @@ if not decision.allowed:
 
 `5` per minute with burst 5 can admit 9 requests in one minute: this is a rate, not a counter that resets. Lower `burst` if you need fewer.
 
+To read the policy from configuration, `parse_policy("10/minute")` returns `limit` and `window_ms` ready to spread: `Limiter(**parse_policy(setting), store=..., scope=..., on_store_error=...)`. The grammar is `<limit>/<count><unit>` with `second`, `minute`, `hour` or `day`, and it is strict: `5/15minute` is valid, `10/min` is not.
+
 ## Peek and reset
 
 ```python
@@ -91,11 +93,37 @@ limit = Depends(rate_limit(limiter, key=..., on_missing_key="reject", on_denied=
 
 With an `AsyncLimiter`, `on_denied` may be `async`.
 
+To key by user or API key, pass your authentication dependency as `identity`. What it returns arrives as `context.identity`, FastAPI resolves it once per request, and a request it rejects is not counted:
+
+```python
+limit = rate_limit(limiter, identity=current_user, key=lambda ctx: ctx.identity.id, on_missing_key="reject")
+```
+
+`limiter` may also be a function of the context, to choose a limiter per request.
+
 To let some requests through without counting them, pass `skip`. It runs before `key`:
 
 ```python
 Depends(rate_limit(limiter, key=..., on_missing_key="shared", skip=lambda ctx: ctx.request.url.path == "/health"))
 ```
+
+## Any ASGI application
+
+`omnilimit.asgi.RateLimitMiddleware` limits a whole application, with `skip` for the paths to leave alone. It is plain ASGI, so it needs no extra and works under Starlette, FastAPI, Litestar, Quart or Django:
+
+```python
+from omnilimit.asgi import RateLimitMiddleware, ip_key
+
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=limiter,
+    key=ip_key(preset="cloud-run"),
+    on_missing_key="shared",
+    skip=lambda ctx: ctx.path == "/health",
+)
+```
+
+It runs before routing, so it cannot key by an identity a dependency resolves later. See [adapters](https://github.com/PabloAlaniz/omnilimit/blob/main/docs/adapters.md).
 
 ## Client IP only
 

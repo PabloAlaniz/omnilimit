@@ -1,0 +1,198 @@
+{
+ "spec": "1",
+ "id": "contract/policy-shorthand",
+ "kind": "contract",
+ "subject": "shorthand",
+ "cases": [
+  {
+   "text": "1/second",
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000
+   }
+  },
+  {
+   "text": "10/minute",
+   "policy": {
+    "limit": 10,
+    "window_ms": 60000
+   }
+  },
+  {
+   "text": "5/15minute",
+   "policy": {
+    "limit": 5,
+    "window_ms": 900000
+   }
+  },
+  {
+   "text": "100/hour",
+   "policy": {
+    "limit": 100,
+    "window_ms": 3600000
+   }
+  },
+  {
+   "text": "1000/day",
+   "policy": {
+    "limit": 1000,
+    "window_ms": 86400000
+   }
+  },
+  {
+   "text": "5/2second",
+   "policy": {
+    "limit": 5,
+    "window_ms": 2000
+   }
+  },
+  {
+   "text": "3/90second",
+   "policy": {
+    "limit": 3,
+    "window_ms": 90000
+   }
+  },
+  {
+   "text": "1/1second",
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000
+   }
+  },
+  {
+   "text": "20/10minute",
+   "policy": {
+    "limit": 20,
+    "window_ms": 600000
+   }
+  },
+  {
+   "text": "7/7day",
+   "policy": {
+    "limit": 7,
+    "window_ms": 604800000
+   }
+  },
+  {
+   "text": "999999999999999/second",
+   "policy": null
+  },
+  {
+   "text": "",
+   "policy": null
+  },
+  {
+   "text": "/",
+   "policy": null
+  },
+  {
+   "text": "10",
+   "policy": null
+  },
+  {
+   "text": "10/",
+   "policy": null
+  },
+  {
+   "text": "/minute",
+   "policy": null
+  },
+  {
+   "text": "10/min",
+   "policy": null
+  },
+  {
+   "text": "10/minutes",
+   "policy": null
+  },
+  {
+   "text": "10 / minute",
+   "policy": null
+  },
+  {
+   "text": "10/ minute",
+   "policy": null
+  },
+  {
+   "text": " 10/minute",
+   "policy": null
+  },
+  {
+   "text": "10/minute ",
+   "policy": null
+  },
+  {
+   "text": "10/Minute",
+   "policy": null
+  },
+  {
+   "text": "10 per minute",
+   "policy": null
+  },
+  {
+   "text": "0/minute",
+   "policy": null
+  },
+  {
+   "text": "010/minute",
+   "policy": null
+  },
+  {
+   "text": "10/0minute",
+   "policy": null
+  },
+  {
+   "text": "10/01minute",
+   "policy": null
+  },
+  {
+   "text": "-1/minute",
+   "policy": null
+  },
+  {
+   "text": "1.5/minute",
+   "policy": null
+  },
+  {
+   "text": "10/1.5minute",
+   "policy": null
+  },
+  {
+   "text": "1e3/minute",
+   "policy": null
+  },
+  {
+   "text": "+5/minute",
+   "policy": null
+  },
+  {
+   "text": "10/minute/hour",
+   "policy": null
+  },
+  {
+   "text": "10/week",
+   "policy": null
+  },
+  {
+   "text": "10/ms",
+   "policy": null
+  },
+  {
+   "text": "٣/minute",
+   "policy": null
+  },
+  {
+   "text": "1000000000000000/second",
+   "policy": null
+  },
+  {
+   "text": "999999999999999/999999999999999day",
+   "policy": null
+  },
+  {
+   "text": "9007199254740991/day",
+   "policy": null
+  }
+ ]
+}

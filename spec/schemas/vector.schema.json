@@ -102,7 +102,7 @@
     },
     {
       "if": { "properties": { "kind": { "const": "contract" } } },
-      "then": { "required": ["subject", "cases"], "properties": { "subject": { "enum": ["policy", "scope", "approximate"] } } }
+      "then": { "required": ["subject", "cases"], "properties": { "subject": { "enum": ["policy", "scope", "shorthand", "approximate"] } } }
     }
   ],
   "definitions": {

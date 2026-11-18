@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TypedDict
 
 from omnilimit._types import HitParams, RawHit
 
@@ -54,6 +55,35 @@ def resolve_policy(limit: int, window_ms: int, burst: int | None = None) -> Reso
 def assert_scope(scope: str) -> None:
     if not isinstance(scope, str) or _SCOPE.fullmatch(scope) is None:
         raise ValueError("omnilimit: scope must match ^[A-Za-z0-9._-]{1,64}$")
+
+
+_SHORTHAND = re.compile(r"([1-9][0-9]{0,14})/([1-9][0-9]{0,14})?(second|minute|hour|day)")
+_SHORTHAND_UNITS = {"second": 1000, "minute": 60_000, "hour": 3_600_000, "day": 86_400_000}
+
+
+class PolicyArgs(TypedDict):
+    """What `parse_policy` returns: spread it into a limiter with `**`."""
+
+    limit: int
+    window_ms: int
+
+
+def parse_policy(text: str) -> PolicyArgs:
+    """Read a policy written as `<limit>/<count><unit>`: `10/minute`, `5/15minute`, `1000/day`.
+
+    The grammar is strict on purpose, so a value from configuration means the same in every
+    port: see "Policy shorthand" in the spec. Raises `ValueError` on anything else.
+    """
+    match = _SHORTHAND.fullmatch(text) if isinstance(text, str) else None
+    if match is None:
+        raise ValueError(
+            'omnilimit: a policy shorthand looks like "10/minute" or "5/15minute" '
+            "(second, minute, hour, day)"
+        )
+    limit = int(match[1])
+    window_ms = int(match[2] or "1") * _SHORTHAND_UNITS[match[3]]
+    resolve_policy(limit, window_ms)
+    return PolicyArgs(limit=limit, window_ms=window_ms)
 
 
 @dataclass(frozen=True, slots=True)

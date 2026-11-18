@@ -33,6 +33,25 @@ export function resolvePolicy(policy: Policy): ResolvedPolicy {
   return { limit, windowMs, burst, capacity, drainMs: ceilDiv(capacity, limit) };
 }
 
+const SHORTHAND_PATTERN = /^([1-9][0-9]{0,14})\/([1-9][0-9]{0,14})?(second|minute|hour|day)$/;
+const SHORTHAND_UNITS: Record<string, number> = { second: 1000, minute: 60_000, hour: 3_600_000, day: 86_400_000 };
+
+/**
+ * Read a policy written as `<limit>/<count><unit>`: `10/minute`, `5/15minute`, `1000/day`.
+ * The grammar is strict on purpose, so a value from configuration means the same in every
+ * port: see "Policy shorthand" in the spec. Throws a `RangeError` on anything else.
+ */
+export function parsePolicy(text: string): { limit: number; windowMs: number } {
+  const match = typeof text === 'string' ? SHORTHAND_PATTERN.exec(text) : null;
+  if (!match) {
+    throw new RangeError('omnilimit: a policy shorthand looks like "10/minute" or "5/15minute" (second, minute, hour, day)');
+  }
+  const limit = Number(match[1]);
+  const windowMs = Number(match[2] ?? '1') * (SHORTHAND_UNITS[match[3] as string] as number);
+  resolvePolicy({ limit, windowMs });
+  return { limit, windowMs };
+}
+
 export function assertScope(scope: string): void {
   if (!SCOPE_PATTERN.test(scope)) {
     throw new RangeError('omnilimit: scope must match /^[A-Za-z0-9._-]{1,64}$/');

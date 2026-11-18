@@ -11,31 +11,41 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
+from omnilimit._adapter import (
+    Denial,
+    DenialError,
+    MissingKeyPolicy,
+    check_policy,
+)
+from omnilimit._adapter import (
+    denial_of as _denial,
+)
+from omnilimit._adapter import (
+    missing_key as _missing,
+)
 from omnilimit._limiter import AsyncLimiter, Limiter
 from omnilimit._types import Decision
 from omnilimit.ip import IpPreset, client_key
 
-MissingKeyPolicy = Literal["shared", "skip", "reject"]
-"""`shared`: everyone without a key shares a bucket. `skip`: no limit. `reject`: answer 400."""
-
-_SHARED_ID = "__omnilimit_shared__"
-
-DenialError = Literal["rate_limited", "rate_limiter_unavailable", "client_not_identified"]
-
-
-@dataclass(frozen=True, slots=True)
-class Denial:
-    """What `on_denied` receives. `decision` is `None` for `client_not_identified`."""
-
-    status: int
-    headers: dict[str, str]
-    error: DenialError
-    decision: Decision | None
-
+__all__ = [
+    "Denial",
+    "DenialError",
+    "KeyContext",
+    "KeyFn",
+    "LimiterFn",
+    "MissingKeyPolicy",
+    "OnDenied",
+    "RateLimitDenied",
+    "SkipFn",
+    "denied_handler",
+    "ip_key",
+    "rate_limit",
+]
 
 OnDenied = Callable[[Request, Denial], "Awaitable[Response] | Response"]
 """Builds the response for a denied request. The default raises `HTTPException`."""
@@ -62,10 +72,15 @@ class KeyContext:
     request: Request
     headers: Any
     peer: str | None
+    identity: Any = None
+    """What the `identity` dependency of `rate_limit` returned, or `None` without one."""
 
 
 KeyFn = Callable[[KeyContext], "Awaitable[str | None] | str | None"]
 """Returns the bucket id, or `None` if it cannot be determined."""
+
+LimiterFn = Callable[[KeyContext], "Awaitable[Limiter | AsyncLimiter] | Limiter | AsyncLimiter"]
+"""Finds the limiter for a request, for example one per plan. It runs on every request."""
 
 SkipFn = Callable[[KeyContext], "Awaitable[bool] | bool"]
 """Returns `True` to let the request through without counting it."""
@@ -95,27 +110,9 @@ def ip_key(
     return key
 
 
-def _context(request: Request) -> KeyContext:
+def _context(request: Request, identity: Any = None) -> KeyContext:
     peer = request.client.host if request.client is not None else None
-    return KeyContext(request=request, headers=request.headers, peer=peer)
-
-
-def _missing(on_missing_key: MissingKeyPolicy) -> Denial | str | None:
-    """The id to count a keyless request under, `None` to skip the limit, or a denial."""
-    if on_missing_key == "skip":
-        return None
-    if on_missing_key == "reject":
-        return Denial(status=400, headers={}, error="client_not_identified", decision=None)
-    return _SHARED_ID
-
-
-def _denial(decision: Decision) -> Denial:
-    error: DenialError = (
-        "rate_limiter_unavailable" if decision.reason == "store_error" else "rate_limited"
-    )
-    return Denial(
-        status=decision.status or 429, headers=decision.headers, error=error, decision=decision
-    )
+    return KeyContext(request=request, headers=request.headers, peer=peer, identity=identity)
 
 
 def _default_denial(denial: Denial) -> HTTPException:
@@ -136,13 +133,47 @@ def _pass(decision: Decision, response: Response) -> None:
         response.headers[name] = value
 
 
+def _with_identity(
+    run: Callable[..., Any], identity: Callable[..., Any] | None
+) -> Callable[..., Any]:
+    """Give `run` the signature FastAPI reads: with the identity dependency only if there is one."""
+    resolve = Depends(identity) if identity is not None else None
+    if inspect.iscoroutinefunction(run):
+        if identity is None:
+
+            async def async_plain(request: Request, response: Response) -> None:
+                await run(request, response, None)
+
+            return async_plain
+
+        async def async_identified(
+            request: Request, response: Response, resolved: Any = resolve
+        ) -> None:
+            await run(request, response, resolved)
+
+        return async_identified
+
+    if identity is None:
+        # A plain `def`: FastAPI runs it in its thread pool, so a blocking store is fine.
+        def plain(request: Request, response: Response) -> None:
+            run(request, response, None)
+
+        return plain
+
+    def identified(request: Request, response: Response, resolved: Any = resolve) -> None:
+        run(request, response, resolved)
+
+    return identified
+
+
 def rate_limit(
-    limiter: Limiter | AsyncLimiter,
+    limiter: Limiter | AsyncLimiter | LimiterFn,
     *,
     key: KeyFn,
     on_missing_key: MissingKeyPolicy,
     on_denied: OnDenied | None = None,
     skip: SkipFn | None = None,
+    identity: Callable[..., Any] | None = None,
 ) -> Callable[..., Any]:
     """Build a dependency: `Depends(rate_limit(limiter, key=..., on_missing_key=...))`.
 
@@ -150,11 +181,17 @@ def rate_limit(
     builds the response for every denial (429, 503 and 400); it needs `denied_handler`.
     `skip` returns `True` for requests to let through uncounted and without headers: a health
     check, a test environment, a feature flag. It runs before `key`.
-    """
-    if on_missing_key not in ("shared", "skip", "reject"):
-        raise ValueError("omnilimit: on_missing_key must be 'shared', 'skip' or 'reject'")
 
-    if isinstance(limiter, AsyncLimiter):
+    `identity` is a FastAPI dependency, such as the one that authenticates the caller. What it
+    returns reaches `key`, `skip` and a `limiter` function as `context.identity`, so you can
+    key by user or API key without resolving them twice. If it raises, no request is counted.
+
+    `limiter` may be a function of the context instead of a limiter, to pick one per request.
+    """
+    check_policy(on_missing_key)
+
+    if not isinstance(limiter, Limiter):
+        source = limiter
 
         async def deny_async(request: Request, denial: Denial) -> HTTPException:
             if on_denied is None:
@@ -163,26 +200,37 @@ def rate_limit(
             built = on_denied(request, denial)
             return RateLimitDenied(denial, await built if inspect.isawaitable(built) else built)
 
-        async def async_dependency(request: Request, response: Response) -> None:
+        async def run_async(request: Request, response: Response, resolved: Any) -> None:
+            context = _context(request, resolved)
             if skip is not None:
-                skipped = skip(_context(request))
+                skipped = skip(context)
                 if await skipped if inspect.isawaitable(skipped) else skipped:
                     return
-            result = key(_context(request))
+            result = key(context)
             id_value = await result if inspect.isawaitable(result) else result
             target = _missing(on_missing_key) if id_value is None else id_value
             if isinstance(target, Denial):
                 raise await deny_async(request, target)
             if target is None:
                 return
-            decision = await limiter.check(target)
+            if isinstance(source, AsyncLimiter):
+                decision = await source.check(target)
+            else:
+                found: Any = source(context)
+                active = await found if inspect.isawaitable(found) else found
+                if isinstance(active, AsyncLimiter):
+                    decision = await active.check(target)
+                else:
+                    # A blocking limiter chosen per request: keep it off the event loop.
+                    decision = await run_in_threadpool(active.check, target)
             if not decision.allowed:
                 raise await deny_async(request, _denial(decision))
             _pass(decision, response)
 
-        return async_dependency
+        return _with_identity(run_async, identity)
 
-    # A plain `def`: FastAPI runs it in its thread pool, so a blocking store is fine.
+    blocking = limiter
+
     def deny(request: Request, denial: Denial) -> HTTPException:
         if on_denied is None:
             return _default_denial(denial)
@@ -193,15 +241,16 @@ def rate_limit(
             raise TypeError("omnilimit: an async on_denied needs an AsyncLimiter")
         return RateLimitDenied(denial, built)
 
-    def dependency(request: Request, response: Response) -> None:
+    def run(request: Request, response: Response, resolved: Any) -> None:
+        context = _context(request, resolved)
         if skip is not None:
-            skipped: Any = skip(_context(request))
+            skipped: Any = skip(context)
             if inspect.iscoroutine(skipped):
                 skipped.close()
                 raise TypeError("omnilimit: an async skip function needs an AsyncLimiter")
             if skipped:
                 return
-        result: Any = key(_context(request))
+        result: Any = key(context)
         if inspect.iscoroutine(result):
             result.close()
             raise TypeError("omnilimit: an async key function needs an AsyncLimiter")
@@ -210,9 +259,9 @@ def rate_limit(
             raise deny(request, target)
         if target is None:
             return
-        decision = limiter.check(target)
+        decision = blocking.check(target)
         if not decision.allowed:
             raise deny(request, _denial(decision))
         _pass(decision, response)
 
-    return dependency
+    return _with_identity(run, identity)

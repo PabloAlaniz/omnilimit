@@ -97,6 +97,18 @@ if (await passwordMatches()) {
 
 `peek` is advisory: a concurrent request can take the last unit, so the `check` that follows stays the authority. Both need an `exact` or `local` store.
 
+### Limits from configuration
+
+A policy can come from a string, with the same strict grammar in every port:
+
+```ts
+import { createLimiter, parsePolicy } from 'omnilimit';
+
+createLimiter({ ...parsePolicy(process.env.API_LIMIT ?? '100/minute'), store, scope: 'api', onStoreError: 'open' });
+```
+
+`10/minute`, `5/15minute` and `1000/day` are valid; `10/min`, `10 / minute` and `10/minutes` are not. See the [spec](spec/SPEC.md#policy-shorthand).
+
 ## Pick a store
 
 | Store | Import | Tier | Use it for |

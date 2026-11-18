@@ -41,6 +41,20 @@ retry_after_ms = ceil((lvl + W - C) / L)     denied only
 **Peak rate.** This is a rate, not a counter that resets. `5` per minute with burst 5 can admit
 `B + L - 1 = 9` requests in one minute. If you need fewer, lower `burst`.
 
+## Policy shorthand
+
+A policy can be written as text, for configuration files and environment variables:
+
+```text
+<limit>/<count><unit>      unit = second | minute | hour | day
+```
+
+`limit` and the optional `count` (default 1) are decimal integers of 1 to 15 digits with no
+leading zero and no sign. `window_ms` is `count` times the unit. Nothing else is accepted: no
+spaces, no plurals, no other units, no upper case. So `10/minute` is 10 per 60000 ms, and
+`5/15minute` is 5 per 900000 ms. The result is then validated like any other policy. `burst`
+has no shorthand: it keeps its default unless given separately.
+
 ## Peek and reset
 
 Two operations sit next to the hit. They change nothing above, and stores of tier `exact` and
@@ -160,6 +174,6 @@ The effective window is the retry time when denied, the time until the next unit
 | `ip` | Client IP strategies, canonical form and masking |
 | `failure` | Each fault with each failure mode |
 | `concurrency` | 200 simultaneous hits allow exactly `burst` |
-| `contract` | Policy and scope validation, and the approximate decision shape |
+| `contract` | Policy and scope validation, the policy shorthand, and the approximate decision shape |
 
 Changing the meaning of a vector requires a new spec version.

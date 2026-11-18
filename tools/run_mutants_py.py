@@ -33,6 +33,18 @@ CORE = [
     ),
     ("clock regression refunds quota", "_gcra.py", "t = max(now_ms, ts)", "t = now_ms"),
     (
+        "shorthand accepts plurals",
+        "_gcra.py",
+        '(second|minute|hour|day)")',
+        '(second|minute|hour|day)s?")',
+    ),
+    (
+        "shorthand matches a prefix",
+        "_gcra.py",
+        "_SHORTHAND.fullmatch(text)",
+        "_SHORTHAND.match(text)",
+    ),
+    (
         "capacity check is off by one",
         "_gcra.py",
         "if drained + params.window_ms > params.capacity:",

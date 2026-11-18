@@ -9,6 +9,7 @@ Every adapter takes the same four things: a `limiter`, a `key`, `onMissingKey`, 
 | Next.js | `omnilimit/next` | `withRateLimit(handler, options)`, `checkRateLimit(request, options)` |
 | Anything with a Fetch API `Request` | `omnilimit/web` | the same two functions |
 | FastAPI | `omnilimit.fastapi` | `Depends(rate_limit(limiter, ...))` |
+| Any ASGI application | `omnilimit.asgi` | `RateLimitMiddleware` |
 
 `omnilimit/next` is `omnilimit/web` under the name Next users look for.
 
@@ -71,6 +72,64 @@ export default {
   }),
 };
 ```
+
+## Keying by who the caller is (FastAPI)
+
+A limit by user or API key needs the identity your authentication dependency resolves. Pass that dependency as `identity`: what it returns reaches `key`, `skip` and a limiter function as `context.identity`.
+
+```python
+from fastapi import Depends
+
+from omnilimit.fastapi import rate_limit
+
+limit = rate_limit(
+    limiter,
+    identity=current_user,                  # your own dependency
+    key=lambda context: context.identity.id,
+    on_missing_key="reject",
+)
+
+@app.post("/reports", dependencies=[Depends(limit)])
+def create_report(user: User = Depends(current_user)): ...
+```
+
+FastAPI resolves a dependency once per request, so `current_user` does not run twice. If it raises, for example a 401, nothing is counted.
+
+The limiter can also be a function of the context, to choose one per request, such as one per plan:
+
+```python
+limit = rate_limit(
+    lambda context: limiters[context.identity.plan],
+    identity=current_user,
+    key=lambda context: context.identity.id,
+    on_missing_key="reject",
+)
+```
+
+It runs on every request, so build the limiters once and look them up. A blocking `Limiter` chosen this way runs in the thread pool.
+
+## A limit over a whole ASGI application
+
+`omnilimit.asgi.RateLimitMiddleware` is plain ASGI and imports no framework: it works under Starlette, FastAPI, Litestar, Quart or Django, and around an application mounted inside another.
+
+```python
+from omnilimit.asgi import RateLimitMiddleware, ip_key
+
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=limiter,
+    key=ip_key(preset="cloud-run"),
+    on_missing_key="shared",
+    skip=lambda context: context.path in ("/health", "/metrics"),
+)
+```
+
+The context has `headers`, `peer`, `method`, `path` and the raw `scope`. To answer in your own format, `on_denied` returns a `DeniedResponse(body, media_type, status, headers)`; the denial's own headers are always sent.
+
+Two things to know:
+
+- A middleware runs before routing and before any dependency, so it cannot key by an identity resolved later. Use the FastAPI dependency for that.
+- If you also use a CORS middleware, add this one first so CORS ends up outermost. Otherwise browsers hide the `429` from your frontend.
 
 ## Letting some requests through
 
