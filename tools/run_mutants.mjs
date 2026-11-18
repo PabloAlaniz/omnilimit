@@ -20,6 +20,8 @@ const core = [
   ['IPv4-mapped not normalised', 'ts/src/ip/index.ts', 'if (isMapped) {', 'if (false) {'],
   ['store failure inverts open/closed', 'ts/src/core/limiter.ts', "const allowed = onStoreError === 'open';", "const allowed = onStoreError === 'closed';"],
   ['store timeout never fires', 'ts/src/core/limiter.ts', 'return await Promise.race([work, timeout]);', 'void timeout.catch(() => {}); return await Promise.race([work, new Promise<T>(() => {}), Promise.resolve().then(() => work)]);'],
+  ['shorthand accepts plurals', 'ts/src/core/gcra.ts', '(second|minute|hour|day)$/;', '(second|minute|hour|day)s?$/;'],
+  ['shorthand accepts a leading zero', 'ts/src/core/gcra.ts', "/^([1-9][0-9]{0,14})\\/", "/^([0-9]{1,15})\\/"],
   ['key ignores the salt', 'ts/src/core/key.ts', 'const saltBytes = encoder.encode(salt);', "const saltBytes = encoder.encode('');"],
   ['key has no separator', 'ts/src/core/key.ts', 'input.set(idBytes, saltBytes.length + 1);', 'input.set(idBytes, saltBytes.length);'],
   ['retry-after header dropped', 'ts/src/core/headers.ts', "out['retry-after'] = String(toSeconds(decision.retryAfterMs));", ''],

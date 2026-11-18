@@ -2,6 +2,7 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
+from omnilimit._gcra import PolicyArgs, parse_policy
 from omnilimit._generated import SPEC_VERSION
 from omnilimit._headers import build_headers
 from omnilimit._limiter import AsyncLimiter, Limiter
@@ -39,10 +40,12 @@ __all__ = [
     "MemoryStore",
     "OnStoreError",
     "Op",
+    "PolicyArgs",
     "RawHit",
     "Reason",
     "Store",
     "Tier",
     "__version__",
     "build_headers",
+    "parse_policy",
 ]

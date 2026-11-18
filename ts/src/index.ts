@@ -1,4 +1,5 @@
 export { createLimiter } from './core/limiter.js';
+export { parsePolicy } from './core/gcra.js';
 export { memoryStore, type MemoryStoreOptions } from './stores/memory.js';
 export { SPEC_VERSION } from './generated/assets.js';
 export type {

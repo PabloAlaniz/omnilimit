@@ -439,9 +439,56 @@ def contract() -> dict[str, dict]:
     }
 
 
+SHORTHAND_UNITS = {"second": 1000, "minute": 60_000, "hour": 3_600_000, "day": 86_400_000}
+
+
+def shorthand(text: object) -> dict | None:
+    """The independent model of the policy shorthand: characters walked by hand, no regex."""
+    if not isinstance(text, str) or "/" not in text:
+        return None
+    head, _, tail = text.partition("/")
+    unit = next((u for u in SHORTHAND_UNITS if tail.endswith(u)), None)
+    if unit is None:
+        return None
+    count = tail[: len(tail) - len(unit)] or "1"
+
+    def digits(value: str) -> bool:
+        return 1 <= len(value) <= 15 and all(c in "0123456789" for c in value) and value[0] != "0"
+
+    if not digits(head) or not digits(count):
+        return None
+    limit, window_ms = int(head), int(count) * SHORTHAND_UNITS[unit]
+    if 2 * limit * window_ms + limit > MAX_SAFE:
+        return None
+    return {"limit": limit, "window_ms": window_ms}
+
+
+def shorthands() -> dict[str, dict]:
+    texts = [
+        "1/second", "10/minute", "5/15minute", "100/hour", "1000/day", "5/2second", "3/90second",
+        "1/1second", "20/10minute", "7/7day", "999999999999999/second",
+        "", "/", "10", "10/", "/minute", "10/min", "10/minutes", "10 / minute", "10/ minute",
+        " 10/minute", "10/minute ", "10/Minute", "10 per minute", "0/minute", "010/minute",
+        "10/0minute", "10/01minute", "-1/minute", "1.5/minute", "10/1.5minute", "1e3/minute",
+        "+5/minute", "10/minute/hour", "10/week", "10/ms", "٣/minute", "1000000000000000/second",
+        "999999999999999/999999999999999day", "9007199254740991/day",
+    ]
+    cases = [{"text": t, "policy": shorthand(t)} for t in texts]
+    assert sum(c["policy"] is not None for c in cases) == 10, "shorthand model drifted"
+    return {
+        "contract/policy-shorthand": {
+            "spec": SPEC,
+            "id": "contract/policy-shorthand",
+            "kind": "contract",
+            "subject": "shorthand",
+            "cases": cases,
+        }
+    }
+
+
 def build() -> dict[str, dict]:
     out: dict[str, dict] = {}
-    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract()):
+    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands()):
         out.update(part)
     return out
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.testclient import TestClient
 
@@ -194,6 +194,107 @@ def test_an_async_skip_needs_an_async_limiter() -> None:
     client = _app(rate_limit(limiter, key=lambda _: "k", on_missing_key="reject", skip=skip))
     with pytest.raises(TypeError, match="AsyncLimiter"):
         client.get("/")
+
+
+def _user(request: Request) -> str:
+    """Stands in for an authentication dependency: 401 without the header."""
+    user = request.headers.get("x-user")
+    if user is None:
+        raise HTTPException(status_code=401, detail="who are you")
+    _user_calls.append(user)
+    return user
+
+
+_user_calls: list[str] = []
+
+
+@both
+def test_identity_keys_by_what_a_dependency_resolved(limiter: Any) -> None:
+    _user_calls.clear()
+    dependency = rate_limit(
+        _fresh(limiter),
+        identity=_user,
+        key=lambda context: f"user:{context.identity}",
+        on_missing_key="reject",
+    )
+    app = FastAPI()
+
+    @app.get("/", dependencies=[Depends(dependency)])
+    def root(user: str = Depends(_user)) -> dict[str, str]:
+        return {"user": user}
+
+    client = TestClient(app)
+    assert client.get("/", headers={"x-user": "a"}).json() == {"user": "a"}
+    assert client.get("/", headers={"x-user": "b"}).status_code == 200
+    assert client.get("/", headers={"x-user": "a"}).status_code == 429
+    # FastAPI resolved the shared dependency once per request, not once per use.
+    assert _user_calls == ["a", "b", "a"]
+
+
+@both
+def test_a_failed_identity_is_not_counted(limiter: Any) -> None:
+    dependency = rate_limit(
+        _fresh(limiter), identity=_user, key=lambda _: "everyone", on_missing_key="reject"
+    )
+    client = _app(dependency)
+    for _ in range(3):
+        assert client.get("/").status_code == 401
+    assert client.get("/", headers={"x-user": "a"}).status_code == 200
+    assert client.get("/", headers={"x-user": "a"}).status_code == 429
+
+
+def test_without_identity_the_context_has_none() -> None:
+    seen: list[Any] = []
+
+    def key(context: KeyContext) -> str:
+        seen.append(context.identity)
+        return "k"
+
+    limiter = Limiter(**POLICY, store=MemoryStore())
+    _app(rate_limit(limiter, key=key, on_missing_key="reject")).get("/")
+    assert seen == [None]
+
+
+def test_the_limiter_can_be_chosen_per_request() -> None:
+    plans = {
+        "free": Limiter(**POLICY, store=MemoryStore()),
+        "pro": AsyncLimiter(**{**POLICY, "limit": 3}, store=MemoryStore()),
+    }
+
+    def choose(context: KeyContext) -> Limiter | AsyncLimiter:
+        return plans[context.headers.get("x-plan", "free")]
+
+    client = _app(
+        rate_limit(choose, key=lambda c: c.headers.get("x-user"), on_missing_key="reject")
+    )
+    free = {"x-user": "a"}
+    pro = {"x-user": "b", "x-plan": "pro"}
+    assert [client.get("/", headers=free).status_code for _ in range(2)] == [200, 429]
+    assert [client.get("/", headers=pro).status_code for _ in range(4)] == [200, 200, 200, 429]
+    assert client.get("/").status_code == 400
+
+
+def test_the_limiter_function_may_be_async_and_sees_the_identity() -> None:
+    limiters = {"a": AsyncLimiter(**POLICY, store=MemoryStore())}
+
+    async def choose(context: KeyContext) -> AsyncLimiter:
+        return limiters[context.identity]
+
+    client = _app(
+        rate_limit(choose, identity=_user, key=lambda c: c.identity, on_missing_key="reject")
+    )
+    assert client.get("/", headers={"x-user": "a"}).status_code == 200
+    assert client.get("/", headers={"x-user": "a"}).status_code == 429
+
+
+def test_the_limiter_function_is_not_asked_for_a_skipped_request() -> None:
+    def choose(context: KeyContext) -> Limiter:
+        raise AssertionError("no limiter is needed for a skipped request")
+
+    client = _app(
+        rate_limit(choose, key=lambda _: "k", on_missing_key="reject", skip=lambda _: True)
+    )
+    assert client.get("/").status_code == 200
 
 
 def test_peer_key_uses_the_connection() -> None:

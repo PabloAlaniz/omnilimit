@@ -21,7 +21,7 @@ from support import (
 )
 
 from omnilimit import SPEC_VERSION, AsyncLimiter, HitParams, Limiter, MemoryStore, RawHit
-from omnilimit._gcra import assert_scope, resolve_policy
+from omnilimit._gcra import assert_scope, parse_policy, resolve_policy
 from omnilimit._key import derive_key
 from omnilimit.ip import canonical_ip, mask_ip, resolve_client_ip
 
@@ -198,6 +198,20 @@ def test_policy_validation(case: dict[str, Any]) -> None:
     else:
         with pytest.raises(ValueError, match="omnilimit"):
             resolve_policy(**case["policy"])
+
+
+@pytest.mark.parametrize("case", _contract("shorthand")["cases"], ids=lambda c: repr(c["text"]))
+def test_policy_shorthand(case: dict[str, Any]) -> None:
+    if case["policy"] is None:
+        with pytest.raises(ValueError, match="omnilimit"):
+            parse_policy(case["text"])
+    else:
+        assert parse_policy(case["text"]) == case["policy"]
+
+
+def test_policy_shorthand_rejects_non_strings() -> None:
+    with pytest.raises(ValueError, match="omnilimit"):
+        parse_policy(10)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("case", _contract("scope")["cases"], ids=lambda c: c["scope"][:20])
