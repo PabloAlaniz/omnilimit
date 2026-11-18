@@ -160,6 +160,19 @@ describe('memoryStore', () => {
     expect((await store.hit('old', params, 5005)).allowed).toBe(true);
   });
 
+  it('follows fake timers installed after the store was created', async () => {
+    const limiter = createLimiter({ store: memoryStore(), scope: 'fake', limit: 1, windowMs: 60_000, onStoreError: 'closed' });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      await limiter.check('k');
+      expect((await limiter.check('k')).allowed).toBe(false);
+      vi.advanceTimersByTime(60_000);
+      expect((await limiter.check('k')).allowed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('takes its clock from `now`, so tests move time without faking timers', async () => {
     let t = 1_000_000;
     const limiter = createLimiter({

@@ -24,7 +24,8 @@ export function memoryStore(options: MemoryStoreOptions = {}): Store {
   if (!Number.isSafeInteger(maxKeys) || maxKeys < 1) {
     throw new RangeError('omnilimit: maxKeys must be a positive integer');
   }
-  const clock = options.now ?? Date.now;
+  // Read `Date.now` on every call: fake timers replace it after the store exists.
+  const clock = options.now ?? (() => Date.now());
   const entries = new Map<string, Entry>();
 
   return {
