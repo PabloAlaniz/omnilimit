@@ -6,6 +6,14 @@ from omnilimit._gcra import PolicyArgs, parse_policy
 from omnilimit._generated import SPEC_VERSION
 from omnilimit._headers import build_headers
 from omnilimit._limiter import AsyncLimiter, Limiter
+from omnilimit._recipes import (
+    AsyncLockout,
+    Attempt,
+    CombinedDecision,
+    Lockout,
+    check_all,
+    check_all_async,
+)
 from omnilimit._types import (
     AsyncStore,
     Decision,
@@ -30,13 +38,17 @@ except PackageNotFoundError:  # pragma: no cover
 __all__ = [
     "SPEC_VERSION",
     "AsyncLimiter",
+    "AsyncLockout",
     "AsyncStore",
+    "Attempt",
+    "CombinedDecision",
     "Decision",
     "HeaderInput",
     "HeaderProfile",
     "HitParams",
     "Limiter",
     "LimiterEvent",
+    "Lockout",
     "MemoryStore",
     "OnStoreError",
     "Op",
@@ -47,5 +59,7 @@ __all__ = [
     "Tier",
     "__version__",
     "build_headers",
+    "check_all",
+    "check_all_async",
     "parse_policy",
 ]

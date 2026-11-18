@@ -82,20 +82,35 @@ if (!decision.allowed) { /* use decision.status and decision.headers */ }
 
 ### Count only failures
 
-`peek` answers without counting and `reset` forgets a bucket, so a limit can count failed attempts only, as a login lockout does:
+A login should not lock out someone who types the right password, and should refuse even the right one once there were too many wrong ones. `createLockout` does both:
 
 ```ts
-const id = `${email}:${ip}`;
-const gate = await failedLogins.peek(id);
-if (!gate.allowed) return tooManyAttempts(gate);   // refuse even a correct password
-if (await passwordMatches()) {
-  await failedLogins.reset(id);                    // success clears the slate
-} else {
-  await failedLogins.check(id);                    // only failures count
-}
+import { createLockout } from 'omnilimit';
+
+const logins = createLockout({ limiter: failedLogins });
+
+const attempt = await logins.attempt(`${email}:${ip}`, () => passwordMatches(email, password));
+if (!attempt.allowed) return tooManyAttempts(attempt.decision);   // verify did not run
+if (!attempt.verified) return wrongPassword();                    // this one was counted
 ```
 
-`peek` is advisory: a concurrent request can take the last unit, so the `check` that follows stays the authority. Both need an `exact` or `local` store.
+A success clears the count. If the verification throws, nothing is counted.
+
+### Several limits on one request
+
+Per IP and per account is the usual pair. Checking them one after the other spends the first even when the second denies. `checkAll` looks at all of them first and counts only if every one would allow:
+
+```ts
+import { checkAll } from 'omnilimit';
+
+const { allowed, decision } = await checkAll([
+  { limiter: perIp, id: ip },
+  { limiter: perAccount, id: email },
+]);
+if (!allowed) return new Response(null, { status: decision.status ?? 429, headers: decision.headers });
+```
+
+`decision` is the one to answer with: the longest wait when denied, the fewest units left when allowed. Both recipes are built on `peek`, which is advisory, so they need an `exact` or `local` store and are not atomic: see [recipes](docs/recipes.md).
 
 ### Limits from configuration
 
@@ -145,7 +160,7 @@ It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) befor
 ## Good to know
 
 - **It limits a rate, not a fixed window count.** `limit: 5` per minute with `burst: 5` can admit 9 requests within one minute. Use a lower `burst` for sensitive routes.
-- **A lockout is built from `peek`, `check` and `reset`,** as shown above. There is no separate ban list or escalating penalty.
+- **A lockout is `createLockout`,** which is `peek`, `check` and `reset` in a fixed order. There is no separate ban list or escalating penalty.
 - **A timed-out store call may still have counted.** The store could finish the hit after the timeout.
 - **Run your CORS middleware first,** or browsers will hide the `429` from your frontend.
 

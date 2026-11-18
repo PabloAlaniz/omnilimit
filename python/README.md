@@ -46,6 +46,24 @@ limiter.reset(user_id)  # forget the bucket, e.g. after a successful login
 
 `peek` builds its decision like `check` and follows `on_store_error` the same way. When allowed, `remaining` includes the request you asked about. It is advisory: a concurrent request can take the last unit, so the `check` that follows is still the authority. `reset` returns `True` once the bucket is gone (or was never there) and `False` if the store failed or timed out, which `on_event` reports; it never raises for a store failure. Both raise `TypeError` if the store cannot do them, which is a configuration error. Every event carries `op` (`"check"`, `"peek"` or `"reset"`), and a successful reset emits type `"reset"`.
 
+## Recipes
+
+```python
+from omnilimit import Lockout, check_all
+
+# Several limits on one request: nothing is counted unless all of them allow.
+result = check_all([(per_ip, ip), (per_account, email)])
+if not result.allowed:
+    ...  # answer result.decision.status with result.decision.headers
+
+# Count only failed attempts, and refuse even a correct one once they are spent.
+attempt = Lockout(failed_logins).attempt(f"{email}:{ip}", lambda: password_matches(email, password))
+if not attempt.allowed:
+    ...  # the verification did not run
+```
+
+With an `AsyncLimiter`, use `check_all_async` and `AsyncLockout`. Both are built on `peek`, so they are not atomic: see [recipes](https://github.com/PabloAlaniz/omnilimit/blob/main/docs/recipes.md).
+
 ## Sync or async
 
 | Code | Limiter | Stores |

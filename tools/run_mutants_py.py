@@ -33,6 +33,18 @@ CORE = [
     ),
     ("clock regression refunds quota", "_gcra.py", "t = max(now_ms, ts)", "t = now_ms"),
     (
+        "check_all counts before looking",
+        "_recipes.py",
+        "_refusal([limiter.peek(id_value) for limiter, id_value in entries])",
+        "_refusal([limiter.check(id_value) for limiter, id_value in entries])",
+    ),
+    (
+        "lockout counts successes",
+        "_recipes.py",
+        "            if self._reset_on_success:\n                self._limiter.reset(id_value)",
+        "            self._limiter.check(id_value)",
+    ),
+    (
         "shorthand accepts plurals",
         "_gcra.py",
         '(second|minute|hour|day)")',
@@ -203,7 +215,12 @@ def run(mutants: list[tuple[str, str, str, str]], tests: list[str]) -> int:
 
 
 def main() -> int:
-    core_tests = ["tests/test_conformance.py", "tests/test_limiter.py", "tests/test_fastapi.py"]
+    core_tests = [
+        "tests/test_conformance.py",
+        "tests/test_limiter.py",
+        "tests/test_fastapi.py",
+        "tests/test_recipes.py",
+    ]
     if fails(core_tests):
         raise SystemExit("the unmutated suite must pass first")
     survived = run(CORE, core_tests)
