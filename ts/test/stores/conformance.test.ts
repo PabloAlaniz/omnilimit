@@ -5,7 +5,7 @@ import { createClient } from 'redis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_LUA, REDIS_PEEK_SHA1 } from '../../src/generated/assets.js';
 import { createLimiter } from '../../src/core/limiter.js';
-import { MIGRATION_SQL, postgresStore } from '../../src/stores/postgres.js';
+import { fromRowQuery, MIGRATION_SQL, postgresStore } from '../../src/stores/postgres.js';
 import { fromIoredis, fromNodeRedis, redisStore } from '../../src/stores/redis.js';
 import type { Store } from '../../src/core/types.js';
 import { runConcurrency, runSequence, vectorsOf, type Vector } from '../support/vectors.js';
@@ -167,6 +167,24 @@ for (const url of postgresUrls) {
     });
 
     suite('pg', () => store);
+
+    // A client that resolves to the rows themselves, with bigint columns as BigInt.
+    const rowsOnly = postgresStore(
+      fromRowQuery(async (sql, params) => {
+        const { rows } = await pool.query(sql, params);
+        return rows.map((row) =>
+          Object.fromEntries(Object.entries(row).map(([name, value]) => [name, typeof value === 'string' && /^\d+$/.test(value) ? BigInt(value) : value])),
+        );
+      }),
+    );
+
+    it('fromRowQuery adapts a rows-only client, cleanup included', async () => {
+      const params = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
+      await rowsOnly.hit(`ol:test:${randomUUID()}`, params, 1);
+      expect(await rowsOnly.cleanup()).toBeGreaterThanOrEqual(1);
+    });
+
+    suite('pg through fromRowQuery', () => rowsOnly);
   });
 }
 

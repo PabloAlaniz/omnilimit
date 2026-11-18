@@ -187,6 +187,48 @@ def test_memory_store_uses_the_real_clock() -> None:
     assert 0 < denied.retry_after_ms <= 1000
 
 
+class Slow:
+    tier = "exact"
+
+    def __init__(self, seconds: float, default_timeout_ms: int | None = None) -> None:
+        self.seconds = seconds
+        if default_timeout_ms is not None:
+            self.default_timeout_ms = default_timeout_ms
+
+    def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        time.sleep(self.seconds)
+        return RawHit(allowed=True, level=1000, ts=0)
+
+
+def test_the_store_default_timeout_applies_when_none_is_given() -> None:
+    patient = Limiter(**BASE, store=Slow(0.06, 500))
+    assert patient.check("a").allowed
+    hasty = Limiter(**BASE, store=Slow(0.06, 10))
+    assert hasty.check("a").status == 503
+
+
+def test_the_callers_timeout_wins_over_the_stores() -> None:
+    limiter = Limiter(**BASE, store=Slow(0.06, 500), store_timeout_ms=10)
+    assert limiter.check("a").status == 503
+
+
+def test_the_store_default_timeout_applies_to_async_limiters() -> None:
+    class AsyncSlow:
+        tier = "exact"
+        default_timeout_ms = 10
+
+        async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            await asyncio.sleep(0.06)
+            return RawHit(allowed=True, level=1000, ts=0)
+
+    async def run() -> None:
+        assert (await AsyncLimiter(**BASE, store=AsyncSlow()).check("a")).status == 503
+        patient = AsyncLimiter(**BASE, store=AsyncSlow(), store_timeout_ms=500)
+        assert (await patient.check("a")).allowed
+
+    asyncio.run(run())
+
+
 def test_memory_store_takes_its_clock_from_now() -> None:
     t = [1_000_000]
     limiter = Limiter(

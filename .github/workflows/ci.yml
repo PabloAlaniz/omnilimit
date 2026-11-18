@@ -145,7 +145,7 @@ jobs:
       - run: uv run ruff format --check src tests
       - run: uv run ruff check src tests
       - run: uv run mypy
-      - run: uv run pytest tests/test_conformance.py tests/test_limiter.py tests/test_fastapi.py
+      - run: uv run pytest tests/test_conformance.py tests/test_limiter.py tests/test_fastapi.py tests/test_asgi.py tests/test_recipes.py
 
   python-stores:
     name: python stores and cross-language

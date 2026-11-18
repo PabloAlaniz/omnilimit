@@ -59,6 +59,12 @@ export interface OmnilimitNamespace {
   get(id: never): unknown;
 }
 
+/**
+ * The first call to an object that is not in memory, as after a deploy, can take over a second.
+ * With the general 1000 ms default a `closed` limiter would answer 503 for that request.
+ */
+export const DURABLE_OBJECT_TIMEOUT_MS = 3000;
+
 /** Atomic and global, using the Durable Object's clock. */
 export function durableObjectStore(namespace: OmnilimitNamespace | undefined): Store {
   const stubFor = (key: string): DurableObjectStubLike => {
@@ -79,6 +85,7 @@ export function durableObjectStore(namespace: OmnilimitNamespace | undefined): S
   };
   return {
     tier: 'exact',
+    defaultTimeoutMs: DURABLE_OBJECT_TIMEOUT_MS,
     hit: (key, params, nowMs) => call('hit', key, params, nowMs),
     peek: (key, params, nowMs) => call('peek', key, params, nowMs),
     async reset(key: string): Promise<void> {

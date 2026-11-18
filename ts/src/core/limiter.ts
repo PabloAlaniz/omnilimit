@@ -21,7 +21,7 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
 export function createLimiter(options: LimiterOptions): Limiter {
   const { store, scope, onStoreError, onEvent, salt = '' } = options;
   const headers = options.headers ?? 'draft-11';
-  const storeTimeoutMs = options.storeTimeoutMs ?? DEFAULT_STORE_TIMEOUT_MS;
+  const storeTimeoutMs = options.storeTimeoutMs ?? store.defaultTimeoutMs ?? DEFAULT_STORE_TIMEOUT_MS;
   const policy = resolvePolicy(options);
   assertScope(scope);
   if (onStoreError !== 'open' && onStoreError !== 'closed') {
