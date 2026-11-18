@@ -5,29 +5,38 @@ from __future__ import annotations
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import Literal
 
 from omnilimit._gcra import MeterState, apply_hit, apply_peek
 from omnilimit._types import HitParams, RawHit
 
 
+def _wall_clock_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
 class MemoryStore:
     """Exact within one process and independent per instance: N instances allow about N times
     the limit. It is thread-safe, and `max_keys` stops rotating ids from exhausting memory.
+
+    `now` is the clock, in milliseconds since the epoch. Pass your own to move time in tests
+    without patching `time`.
     """
 
     tier: Literal["local"] = "local"
 
-    def __init__(self, max_keys: int = 100_000) -> None:
+    def __init__(self, max_keys: int = 100_000, *, now: Callable[[], int] | None = None) -> None:
         if not isinstance(max_keys, int) or isinstance(max_keys, bool) or max_keys < 1:
             raise ValueError("omnilimit: max_keys must be a positive integer")
         self._max_keys = max_keys
+        self._now = now if now is not None else _wall_clock_ms
         self._lock = threading.Lock()
         # key -> (state, expires_at); insertion order tracks recency
         self._entries: OrderedDict[str, tuple[MeterState, int]] = OrderedDict()
 
     def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
-        now = now_ms if now_ms is not None else time.time_ns() // 1_000_000
+        now = now_ms if now_ms is not None else self._now()
         with self._lock:
             entry = self._entries.get(key)
             hit, write = apply_hit(entry[0] if entry else None, params, now)
@@ -39,7 +48,7 @@ class MemoryStore:
 
     def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
         """What `hit` would answer now. It writes nothing and leaves the eviction order alone."""
-        now = now_ms if now_ms is not None else time.time_ns() // 1_000_000
+        now = now_ms if now_ms is not None else self._now()
         with self._lock:
             entry = self._entries.get(key)
             return apply_peek(entry[0] if entry else None, params, now)

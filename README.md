@@ -60,6 +60,8 @@ import { ipKey, withRateLimit } from 'omnilimit/next';
 export const POST = withRateLimit(handler, { limiter, key: ipKey({ preset: 'vercel' }), onMissingKey: 'shared' });
 ```
 
+`omnilimit/web` has the same two helpers for anything that receives a Fetch API `Request`: a Worker's `fetch`, an Astro or SvelteKit endpoint. See [adapters](docs/adapters.md), which also covers a limiter built per request (a Workers binding in `env`) and `skip`.
+
 To answer in your own error format, pass `onDenied`. It gets the status, headers and decision, and in Hono it may throw so your `app.onError` handles it:
 
 ```ts

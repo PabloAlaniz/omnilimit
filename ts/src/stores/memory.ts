@@ -4,6 +4,11 @@ import type { HitParams, RawHit, Store } from '../core/types.js';
 export interface MemoryStoreOptions {
   /** Bucket cap, so rotating ids cannot exhaust memory. Oldest buckets go first. Defaults to 100000. */
   maxKeys?: number;
+  /**
+   * The clock, in milliseconds since the epoch. Defaults to `Date.now`. Pass your own to move
+   * time in tests without faking timers.
+   */
+  now?: () => number;
 }
 
 interface Entry extends MeterState {
@@ -19,12 +24,13 @@ export function memoryStore(options: MemoryStoreOptions = {}): Store {
   if (!Number.isSafeInteger(maxKeys) || maxKeys < 1) {
     throw new RangeError('omnilimit: maxKeys must be a positive integer');
   }
+  const clock = options.now ?? Date.now;
   const entries = new Map<string, Entry>();
 
   return {
     tier: 'local',
     async hit(key: string, params: HitParams, nowMs?: number): Promise<RawHit> {
-      const now = nowMs ?? Date.now();
+      const now = nowMs ?? clock();
       const current = entries.get(key) ?? null;
       const { hit, write } = applyHit(current, params, now);
       if (write) {
@@ -37,7 +43,7 @@ export function memoryStore(options: MemoryStoreOptions = {}): Store {
     },
     async peek(key: string, params: HitParams, nowMs?: number): Promise<RawHit> {
       // Reading does not refresh recency: only counted requests keep a bucket alive.
-      return applyPeek(entries.get(key) ?? null, params, nowMs ?? Date.now());
+      return applyPeek(entries.get(key) ?? null, params, nowMs ?? clock());
     },
     async reset(key: string): Promise<void> {
       entries.delete(key);

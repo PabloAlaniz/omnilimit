@@ -87,6 +87,27 @@ def mask_ip(ip: str, prefix: int) -> str | None:
     return network.network_address.compressed
 
 
+def client_key(
+    headers: Any,
+    peer: str | None = None,
+    *,
+    preset: IpPreset | None = None,
+    xff_hops: int | None = None,
+    header: str | None = None,
+    use_peer: bool = False,
+    ipv6_prefix: int = 64,
+) -> str | None:
+    """The bucket id for a client: its trusted IP with IPv6 grouped by prefix, or `None`.
+
+    It is `resolve_client_ip` followed by `mask_ip`, which is what a hand-written key needs:
+    `client_key(request.headers, preset="cloudflare") or "shared"`.
+    """
+    ip = resolve_client_ip(
+        headers, peer, preset=preset, xff_hops=xff_hops, header=header, use_peer=use_peer
+    )
+    return None if ip is None else mask_ip(ip, ipv6_prefix)
+
+
 def _from_xff(value: str | None, hops: int) -> str | None:
     if value is None:
         return None

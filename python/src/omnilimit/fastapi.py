@@ -17,7 +17,7 @@ from fastapi import HTTPException, Request, Response
 
 from omnilimit._limiter import AsyncLimiter, Limiter
 from omnilimit._types import Decision
-from omnilimit.ip import IpPreset, mask_ip, resolve_client_ip
+from omnilimit.ip import IpPreset, client_key
 
 MissingKeyPolicy = Literal["shared", "skip", "reject"]
 """`shared`: everyone without a key shares a bucket. `skip`: no limit. `reject`: answer 400."""
@@ -67,6 +67,9 @@ class KeyContext:
 KeyFn = Callable[[KeyContext], "Awaitable[str | None] | str | None"]
 """Returns the bucket id, or `None` if it cannot be determined."""
 
+SkipFn = Callable[[KeyContext], "Awaitable[bool] | bool"]
+"""Returns `True` to let the request through without counting it."""
+
 
 def ip_key(
     *,
@@ -79,15 +82,15 @@ def ip_key(
     """Key requests by trusted client IP. See `omnilimit.ip.resolve_client_ip`."""
 
     def key(context: KeyContext) -> str | None:
-        ip = resolve_client_ip(
+        return client_key(
             context.headers,
             context.peer,
             preset=preset,
             xff_hops=xff_hops,
             header=header,
             use_peer=use_peer,
+            ipv6_prefix=ipv6_prefix,
         )
-        return None if ip is None else mask_ip(ip, ipv6_prefix)
 
     return key
 
@@ -139,11 +142,14 @@ def rate_limit(
     key: KeyFn,
     on_missing_key: MissingKeyPolicy,
     on_denied: OnDenied | None = None,
+    skip: SkipFn | None = None,
 ) -> Callable[..., Any]:
     """Build a dependency: `Depends(rate_limit(limiter, key=..., on_missing_key=...))`.
 
     `on_missing_key` is required so a misconfigured proxy cannot pass unnoticed. `on_denied`
     builds the response for every denial (429, 503 and 400); it needs `denied_handler`.
+    `skip` returns `True` for requests to let through uncounted and without headers: a health
+    check, a test environment, a feature flag. It runs before `key`.
     """
     if on_missing_key not in ("shared", "skip", "reject"):
         raise ValueError("omnilimit: on_missing_key must be 'shared', 'skip' or 'reject'")
@@ -158,6 +164,10 @@ def rate_limit(
             return RateLimitDenied(denial, await built if inspect.isawaitable(built) else built)
 
         async def async_dependency(request: Request, response: Response) -> None:
+            if skip is not None:
+                skipped = skip(_context(request))
+                if await skipped if inspect.isawaitable(skipped) else skipped:
+                    return
             result = key(_context(request))
             id_value = await result if inspect.isawaitable(result) else result
             target = _missing(on_missing_key) if id_value is None else id_value
@@ -184,6 +194,13 @@ def rate_limit(
         return RateLimitDenied(denial, built)
 
     def dependency(request: Request, response: Response) -> None:
+        if skip is not None:
+            skipped: Any = skip(_context(request))
+            if inspect.iscoroutine(skipped):
+                skipped.close()
+                raise TypeError("omnilimit: an async skip function needs an AsyncLimiter")
+            if skipped:
+                return
         result: Any = key(_context(request))
         if inspect.iscoroutine(result):
             result.close()

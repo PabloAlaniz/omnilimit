@@ -7,6 +7,7 @@ import { createLimiter, memoryStore, type Store } from '../../src/index.js';
 import { ipKey as expressIpKey, rateLimit as expressRateLimit } from '../../src/adapters/express.js';
 import { ipKey as honoIpKey, rateLimit as honoRateLimit } from '../../src/adapters/hono.js';
 import { checkRateLimit, ipKey as nextIpKey, withRateLimit } from '../../src/adapters/next.js';
+import { checkRateLimit as webCheck, ipKey as webIpKey, withRateLimit as webWrap } from '../../src/adapters/web.js';
 
 const limiter = (limit = 2, store: Store = memoryStore()) =>
   createLimiter({ limit, windowMs: 60_000, store, scope: 'a', onStoreError: 'closed' });
@@ -114,6 +115,104 @@ describe('hono', () => {
     expect((await app.request('/')).status).toBe(400);
     expect(seen).toEqual([['client_not_identified', 400, null]]);
   });
+  it('skip lets a request through without counting or headers', async () => {
+    const app = build({ skip: ({ c }) => new URL(c.req.raw.url).pathname === '/health' });
+    app.get('/health', (c) => c.text('up'));
+    for (let i = 0; i < 5; i += 1) {
+      const response = await app.request('/health', { headers: cf('203.0.113.1') });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('ratelimit')).toBeNull();
+    }
+    // Nothing was counted: the whole budget is still there.
+    const statuses = [];
+    for (let i = 0; i < 3; i += 1) statuses.push((await app.request('/', { headers: cf('203.0.113.1') })).status);
+    expect(statuses).toEqual([200, 200, 429]);
+  });
+
+  it('finds the limiter per request, for example from env', async () => {
+    type Bindings = { limit: number };
+    const cache = new Map<number, ReturnType<typeof limiter>>();
+    const app = new Hono<{ Bindings: Bindings }>();
+    app.use(
+      '*',
+      honoRateLimit({
+        limiter: async ({ c }) => {
+          const { limit } = c.env as Bindings;
+          if (!cache.has(limit)) cache.set(limit, limiter(limit));
+          return cache.get(limit) as ReturnType<typeof limiter>;
+        },
+        key: honoIpKey({ preset: 'cloudflare' }),
+        onMissingKey: 'reject',
+      }),
+    );
+    app.get('/', (c) => c.text('ok'));
+    const statuses = [];
+    for (let i = 0; i < 2; i += 1) statuses.push((await app.request('/', { headers: cf('203.0.113.1') }, { limit: 1 })).status);
+    expect(statuses).toEqual([200, 429]);
+    // Another env gets another limiter, and the function is not asked when the key is rejected.
+    expect((await app.request('/', { headers: cf('203.0.113.1') }, { limit: 5 })).status).toBe(200);
+    expect((await app.request('/', {}, { limit: 9 })).status).toBe(400);
+    expect(cache.has(9)).toBe(false);
+  });
+});
+
+describe('web', () => {
+  type Env = { limiter: ReturnType<typeof limiter>; off?: boolean };
+  const request = (ip = '203.0.113.1') => new Request('https://x.test/', { headers: cf(ip) });
+
+  it('checks a plain Request, with the limiter taken from what the caller passes', async () => {
+    const env: Env = { limiter: limiter(1) };
+    const options = {
+      limiter: ({ extra }: { extra: Env }) => extra.limiter,
+      key: webIpKey({ preset: 'cloudflare' }),
+      onMissingKey: 'reject' as const,
+    };
+    const first = await webCheck(request(), options, env);
+    expect(first.denied).toBeUndefined();
+    expect(first.headers).toHaveProperty('ratelimit');
+    const second = await webCheck(request(), options, env);
+    expect(second.denied?.status).toBe(429);
+    expect(await second.denied?.json()).toEqual({ error: 'rate_limited' });
+  });
+
+  it('skip sees the request and the extra, and sends no headers', async () => {
+    const env: Env = { limiter: limiter(1), off: true };
+    const options = {
+      limiter: ({ extra }: { extra: Env }) => extra.limiter,
+      key: webIpKey({ preset: 'cloudflare' }),
+      onMissingKey: 'reject' as const,
+      skip: ({ extra, request: r }: { extra: Env; request: Request }) => extra.off === true && r.method === 'GET',
+    };
+    for (let i = 0; i < 3; i += 1) expect(await webCheck(request(), options, env)).toEqual({ headers: {} });
+    env.off = false;
+    expect((await webCheck(request(), options, env)).headers).toHaveProperty('ratelimit');
+  });
+
+  it('reads the peer when the runtime can give one', async () => {
+    const options = {
+      limiter: limiter(1),
+      key: webIpKey({ preset: 'direct' }),
+      onMissingKey: 'reject' as const,
+    };
+    expect((await webCheck(request(), options)).denied?.status).toBe(400);
+    const withPeer = { ...options, peer: ({ extra }: { extra: { address: string } }) => extra.address };
+    expect((await webCheck(request(), withPeer, { address: '198.51.100.9' })).denied).toBeUndefined();
+    expect((await webCheck(request(), withPeer, { address: '198.51.100.9' })).denied?.status).toBe(429);
+    expect((await webCheck(request(), withPeer, { address: '198.51.100.10' })).denied).toBeUndefined();
+  });
+
+  it('wraps a fetch-style handler and hands its second argument on as extra', async () => {
+    const env: Env = { limiter: limiter(1) };
+    const handler = webWrap(async (_request: Request, e: Env) => new Response(e.off ? 'off' : 'on'), {
+      limiter: ({ extra }) => extra.limiter,
+      key: webIpKey({ preset: 'cloudflare' }),
+      onMissingKey: 'shared',
+    });
+    const first = await handler(request(), env);
+    expect(await first.text()).toBe('on');
+    expect(first.headers.get('ratelimit')).toBe('"a";r=0;t=60');
+    expect((await handler(request(), env)).status).toBe(429);
+  });
 });
 
 describe('next', () => {
@@ -218,5 +317,22 @@ describe('express', () => {
     await fetch(failing);
     const response = await fetch(failing);
     expect(await response.json()).toEqual({ message: 'custom denial' });
+  });
+  it('skip passes the request on without counting', async () => {
+    const calls: string[] = [];
+    const middleware = expressRateLimit({
+      limiter: limiter(1),
+      key: () => 'k',
+      onMissingKey: 'reject',
+      skip: ({ req }) => req.headers['x-internal'] === '1',
+    });
+    const res = { setHeader: (name: string) => calls.push(name), status: () => ({ json: () => calls.push('json') }) };
+    const run = (headers: Record<string, string>) =>
+      new Promise<void>((resolve) => void middleware({ headers }, res, () => (calls.push('next'), resolve())));
+    await run({ 'x-internal': '1' });
+    await run({ 'x-internal': '1' });
+    expect(calls).toEqual(['next', 'next']);
+    await run({});
+    expect(calls.filter((call) => call === 'next')).toHaveLength(3);
   });
 });

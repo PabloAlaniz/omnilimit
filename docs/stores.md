@@ -67,6 +67,8 @@ const store = memoryStore({ maxKeys: 100_000 });
 
 It works within one process. Several instances each keep their own count, and serverless platforms may start from zero often. At `maxKeys`, expired buckets go first, then those with the oldest writes, so an attacker rotating ids can push out other buckets.
 
+In tests, pass `now` to move time yourself instead of faking timers: `memoryStore({ now: () => clock })` (`MemoryStore(now=...)` in Python).
+
 ## Workers KV
 
 Not supported. KV is not atomic and changes can take 60 seconds or more to reach other locations, so it cannot keep the promises above. The `Store` interface is public if you accept that trade-off in your own code.

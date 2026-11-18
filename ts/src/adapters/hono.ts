@@ -7,12 +7,12 @@ import {
   type IpKeyOptions,
   type KeyContext,
   type KeyFn,
+  type LimiterSource,
   type MissingKeyPolicy,
 } from './shared.js';
-import type { Limiter } from '../core/types.js';
 
 export { ipKey };
-export type { Denial, IpKeyOptions, KeyContext, KeyFn, MissingKeyPolicy };
+export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy };
 
 /** The parts of Hono's `Context` this adapter touches. */
 export interface HonoContextLike {
@@ -26,9 +26,12 @@ export interface HonoKeyContext extends KeyContext {
 }
 
 export interface HonoRateLimitOptions<C extends HonoContextLike = HonoContextLike> {
-  limiter: Limiter;
+  /** The limiter, or a function that finds it for each request, for example from `c.env`. */
+  limiter: LimiterSource<HonoKeyContext & { c: C }>;
   key: KeyFn<HonoKeyContext & { c: C }>;
   onMissingKey: MissingKeyPolicy;
+  /** Return `true` to let a request through without counting it. */
+  skip?: (context: HonoKeyContext & { c: C }) => boolean | Promise<boolean>;
   /** How to read the TCP peer. By default uses `@hono/node-server`'s `env.incoming` when present. */
   peer?: (c: C) => string | null | undefined;
   /**
