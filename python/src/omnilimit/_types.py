@@ -41,6 +41,9 @@ class Store(Protocol):
     `peek(key, params, now_ms=None) -> RawHit` answers what `hit` would, without writing, with
     the drained level and the stored timestamp (or now, with no bucket); `reset(key) -> None`
     deletes the bucket. Approximate stores cannot offer them.
+
+    A store may set `default_timeout_ms`, the timeout a limiter uses for it when
+    `store_timeout_ms` is not given.
     """
 
     # Read-only, so a store may narrow it to the one tier it promises.

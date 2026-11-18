@@ -22,6 +22,26 @@ const store = postgresStore(pool); // any object with query(sql, params), such a
 1. Apply `MIGRATION_SQL` once with your migration tool. omnilimit never runs it for you, and it is safe to reapply. Upgrading from 0.1, reapply it to add `omnilimit_peek_v1`, which `peek` needs.
 2. Schedule `store.cleanup()`, which deletes expired buckets in batches.
 
+A client whose query function resolves to the rows themselves, instead of `{ rows }`, goes through `fromRowQuery`:
+
+```ts
+import { fromRowQuery, postgresStore } from 'omnilimit/postgres';
+
+const store = postgresStore(fromRowQuery((sql, params) => prisma.$queryRawUnsafe(sql, ...params)));
+```
+
+That covers Prisma and serverless HTTP drivers. Only `pg` is in the test matrix; the adapter itself is tested against real Postgres with a rows-only wrapper. Whatever you pass must run each statement on its own, outside any transaction of yours.
+
+In Python, besides psycopg 3 there are stores for the engine or pool an application already has:
+
+| You have | Import | Use with |
+|---|---|---|
+| A SQLAlchemy `Engine` | `omnilimit.stores.sqlalchemy.SqlAlchemyStore` | `Limiter` |
+| A SQLAlchemy `AsyncEngine` | `omnilimit.stores.sqlalchemy.AsyncSqlAlchemyStore` | `AsyncLimiter` |
+| An asyncpg pool | `omnilimit.stores.asyncpg.AsyncpgStore` | `AsyncLimiter` |
+
+The SQLAlchemy stores borrow connections from the engine's own pool and run in AUTOCOMMIT, whichever driver the engine uses. They are tested with psycopg, psycopg2, pg8000 and asyncpg. They take the engine, not a session: a hit must commit on its own, so that rolling back your work does not undo the count.
+
 Each hit takes a row lock and writes a row, so busy buckets contend and create dead tuples. It is exact, and convenient when Postgres is already there, but it has not been benchmarked: use Redis for high traffic.
 
 ## Durable Objects
@@ -42,6 +62,8 @@ const store = durableObjectStore(env.RATE_LIMITER);
 ```
 
 There is one object per bucket, and an alarm deletes its storage after it drains. `reset` deletes the storage and the alarm. Requests incur Durable Object billing, and every check, peek and reset is one round trip to the object.
+
+The first call to an object that is not in memory, as after a deploy, can take over a second. This store therefore declares a default timeout of 3000 ms, which a limiter uses unless you set `storeTimeoutMs`.
 
 ## Cloudflare rate limit binding
 

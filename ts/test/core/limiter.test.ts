@@ -57,6 +57,27 @@ describe('createLimiter', () => {
   });
 });
 
+describe('store timeout', () => {
+  const slow = (ms: number, defaultTimeoutMs?: number): Store => ({
+    tier: 'exact',
+    ...(defaultTimeoutMs === undefined ? {} : { defaultTimeoutMs }),
+    hit: () => new Promise((resolve) => setTimeout(() => resolve({ allowed: true, level: 1000, ts: 0 }), ms)),
+  });
+  const base = { scope: 't', limit: 1, windowMs: 1000, onStoreError: 'closed' as const };
+
+  it("uses the store's own default when the caller gives none", async () => {
+    const patient = createLimiter({ ...base, store: slow(60, 500) });
+    expect((await patient.check('a')).allowed).toBe(true);
+    const hasty = createLimiter({ ...base, store: slow(60, 10) });
+    expect((await hasty.check('a')).status).toBe(503);
+  });
+
+  it("lets the caller's value win over the store's", async () => {
+    const limiter = createLimiter({ ...base, store: slow(60, 500), storeTimeoutMs: 10 });
+    expect((await limiter.check('a')).status).toBe(503);
+  });
+});
+
 describe('peek and reset', () => {
   const policy = { limit: 2, windowMs: 60_000, scope: 't', onStoreError: 'closed' } as const;
 

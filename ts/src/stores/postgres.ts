@@ -6,6 +6,25 @@ export interface PgQueryable {
   query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
 }
 
+/**
+ * Adapt a client whose query function resolves to the rows themselves instead of `{ rows }`,
+ * such as Prisma's `$queryRawUnsafe` or a serverless HTTP driver:
+ *
+ *     postgresStore(fromRowQuery((sql, params) => prisma.$queryRawUnsafe(sql, ...params)))
+ *
+ * The function must run each statement on its own, outside any transaction of yours: a hit
+ * inside one would hold the bucket's row lock until it ends.
+ */
+export function fromRowQuery(
+  query: (sql: string, params: unknown[]) => Promise<ReadonlyArray<Record<string, unknown>>>,
+): PgQueryable {
+  return {
+    async query(sql, params = []) {
+      return { rows: [...(await query(sql, params))] };
+    },
+  };
+}
+
 export interface PostgresStore extends Store {
   /** Delete up to `batch` expired buckets and return how many were removed. Schedule it yourself. */
   cleanup(batch?: number): Promise<number>;

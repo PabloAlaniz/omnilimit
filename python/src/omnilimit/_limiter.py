@@ -36,6 +36,14 @@ _STORE_ERROR_RETRY_MS = 1000
 _T = TypeVar("_T")
 
 
+def _timeout_for(store: Any, given: int | None) -> int:
+    """The limiter's timeout: what the caller gave, else the store's own default, else 1000."""
+    if given is not None:
+        return given
+    default = getattr(store, "default_timeout_ms", None)
+    return default if isinstance(default, int) else _DEFAULT_STORE_TIMEOUT_MS
+
+
 def _store_method(store: Any, op: Literal["peek", "reset"]) -> Any:
     """The store's optional method, or a `TypeError`: a missing one is a configuration error."""
     method = getattr(store, op, None)
@@ -222,7 +230,7 @@ class Limiter:
         window_ms: int,
         on_store_error: OnStoreError,
         burst: int | None = None,
-        store_timeout_ms: int = _DEFAULT_STORE_TIMEOUT_MS,
+        store_timeout_ms: int | None = None,
         max_store_threads: int = _DEFAULT_MAX_STORE_THREADS,
         headers: HeaderOption = "draft-11",
         salt: str = "",
@@ -240,7 +248,7 @@ class Limiter:
             window_ms=window_ms,
             burst=burst,
             on_store_error=on_store_error,
-            store_timeout_ms=store_timeout_ms,
+            store_timeout_ms=_timeout_for(store, store_timeout_ms),
             headers=headers,
             salt=salt,
             on_event=on_event,
@@ -321,7 +329,7 @@ class AsyncLimiter:
         window_ms: int,
         on_store_error: OnStoreError,
         burst: int | None = None,
-        store_timeout_ms: int = _DEFAULT_STORE_TIMEOUT_MS,
+        store_timeout_ms: int | None = None,
         headers: HeaderOption = "draft-11",
         salt: str = "",
         on_event: EventHook | None = None,
@@ -336,7 +344,7 @@ class AsyncLimiter:
             window_ms=window_ms,
             burst=burst,
             on_store_error=on_store_error,
-            store_timeout_ms=store_timeout_ms,
+            store_timeout_ms=_timeout_for(store, store_timeout_ms),
             headers=headers,
             salt=salt,
             on_event=on_event,

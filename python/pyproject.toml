@@ -28,6 +28,8 @@ dependencies = []
 [project.optional-dependencies]
 redis = ["redis>=5.0"]
 postgres = ["psycopg>=3.1"]
+sqlalchemy = ["sqlalchemy>=2.0"]
+asyncpg = ["asyncpg>=0.29"]
 fastapi = ["fastapi>=0.109"]
 
 [project.urls]
@@ -37,15 +39,20 @@ Specification = "https://github.com/PabloAlaniz/omnilimit/blob/main/spec/SPEC.md
 
 [dependency-groups]
 dev = [
+    "asyncpg>=0.29",
     "coverage>=7.6",
     "fastapi>=0.109",
     "httpx>=0.27",
     "jsonschema>=4.23",
+    "greenlet>=3.0",
     "mypy>=1.13",
+    "pg8000>=1.31",
     "psycopg[binary,pool]>=3.2",
+    "psycopg2-binary>=2.9",
     "pytest>=8.3",
     "redis>=5.0",
     "ruff>=0.8",
+    "sqlalchemy>=2.0",
     "valkey>=6.0",
 ]
 

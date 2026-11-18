@@ -34,6 +34,12 @@ export interface RawHit {
  */
 export interface Store {
   readonly tier: Tier;
+  /**
+   * The timeout a limiter uses for this store when `storeTimeoutMs` is not given. A store sets
+   * it when its normal latency does not fit the general default, as a Durable Object waking
+   * from cold does.
+   */
+  readonly defaultTimeoutMs?: number;
   hit(key: string, params: HitParams, nowMs?: number): Promise<RawHit>;
   /**
    * The decision `hit` would give now, without writing. `level` is the drained level and `ts`
@@ -86,7 +92,7 @@ export interface LimiterOptions extends Policy {
    * usually wants `closed`, a public read route usually wants `open`.
    */
   onStoreError: 'open' | 'closed';
-  /** Milliseconds before a store call counts as failed. Defaults to 1000. */
+  /** Milliseconds before a store call counts as failed. Defaults to the store's own default, or 1000. */
   storeTimeoutMs?: number;
   /** Response headers. Defaults to `draft-11`. `Retry-After` is always sent when denied. */
   headers?: HeaderProfile | ((input: HeaderInput) => Record<string, string>);

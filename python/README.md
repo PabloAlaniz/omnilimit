@@ -4,7 +4,7 @@ Rate limiting that behaves the same across stacks, and proves it. This port foll
 
 - **Trusted client IPs.** It reads `X-Forwarded-For` from the right. Rotating the header does not evade the limit.
 - **An explicit failure mode.** You must decide, per limiter, what happens when the store is down.
-- **No dependencies.** Extras only install a client: `omnilimit[redis]`, `omnilimit[postgres]`, `omnilimit[fastapi]`.
+- **No dependencies.** Extras only install a client: `omnilimit[redis]`, `omnilimit[postgres]`, `omnilimit[sqlalchemy]`, `omnilimit[asyncpg]`, `omnilimit[fastapi]`.
 
 ```bash
 pip install omnilimit
@@ -70,8 +70,8 @@ With an `AsyncLimiter`, use `check_all_async` and `AsyncLockout`. Both are built
 
 | Code | Limiter | Stores |
 |---|---|---|
-| Flask, Django, `def` dependencies | `Limiter` | `MemoryStore`, `RedisStore`, `PostgresStore` |
-| `async def` | `AsyncLimiter` | `MemoryStore`, `AsyncRedisStore`, `AsyncPostgresStore` |
+| Flask, Django, `def` dependencies | `Limiter` | `MemoryStore`, `RedisStore`, `PostgresStore`, `SqlAlchemyStore` |
+| `async def` | `AsyncLimiter` | `MemoryStore`, `AsyncRedisStore`, `AsyncPostgresStore`, `AsyncSqlAlchemyStore`, `AsyncpgStore` |
 
 `Limiter` runs each store call in its own daemon thread, because Python cannot abandon a blocking call. `store_timeout_ms` bounds the request, and `max_store_threads` bounds the calls in flight. Set socket timeouts on your client as well, so a hung call ends.
 
@@ -162,3 +162,5 @@ It returns `None` rather than guessing. Check that the preset matches your deplo
 ## Postgres
 
 `omnilimit.stores.postgres.MIGRATION_SQL` creates the table and functions: apply it with your migration tool. Stores take a psycopg 3 pool or a connection with `autocommit=True`. Each hit is a write, so it is not meant for high traffic, and `cleanup()` is yours to schedule. `MIGRATION_SQL` is idempotent: apply it again after upgrading, since `peek` needs `omnilimit_peek_v1`.
+
+If the application already has a SQLAlchemy engine or an asyncpg pool, use that instead of opening a second pool: `SqlAlchemyStore(engine)` and `AsyncSqlAlchemyStore(async_engine)` from `omnilimit.stores.sqlalchemy` (extra `omnilimit[sqlalchemy]`, any Postgres driver), or `AsyncpgStore(pool)` from `omnilimit.stores.asyncpg` (extra `omnilimit[asyncpg]`). The SQLAlchemy stores take the engine, not a session, and commit each hit on their own.

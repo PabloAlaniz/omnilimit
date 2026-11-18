@@ -164,6 +164,9 @@ keep any of these promises.
 A store error, a timeout or a missing binding is a store failure. There is no default policy:
 callers must choose `open` or `closed`.
 
+The timeout is the caller's, else the store's own default, else 1000 ms. A store declares a
+default only when its normal latency does not fit the general one.
+
 | Mode | allowed | reason | status | Headers |
 |---|---|---|---|---|
 | `open` | true | `store_error` | none | none |
