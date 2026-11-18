@@ -3,12 +3,12 @@
 What may come next. Nothing here is promised, and each item has to keep the contract: one
 behaviour across ports, verified by vectors from the independent generator.
 
-## Status
+## Versions
 
-| Version | State | Contents |
-|---|---|---|
-| 0.3 | Merged, not yet published | See [done in 0.3](#done-in-03) |
-| 0.2 | Published | `peek` and `reset`, and `onDenied` in every adapter |
+| Version | Contents |
+|---|---|
+| 0.3 | See [done in 0.3](#done-in-03) |
+| 0.2 | `peek` and `reset`, and `onDenied` in every adapter |
 
 ## Next
 
