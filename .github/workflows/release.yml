@@ -17,12 +17,32 @@ jobs:
     outputs:
       ts_released: ${{ steps.release.outputs['ts--release_created'] }}
       py_released: ${{ steps.release.outputs['python--release_created'] }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # The release pull request is opened with the workflow token, so `pull_request` workflows do
+  # not run on it. Start the required checks on its branch by hand.
+  check-release-pr:
+    needs: release-please
+    if: needs.release-please.outputs.pr != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+          TITLE: ${{ fromJSON(needs.release-please.outputs.pr).title }}
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH"
+          gh workflow run pr-title.yml --ref "$BRANCH" -f title="$TITLE"
 
   publish-npm:
     needs: release-please

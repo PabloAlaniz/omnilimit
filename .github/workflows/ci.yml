@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow starts this on the release branch: a pull request opened with the
+  # workflow token does not trigger `pull_request`, and the checks are required to merge.
+  workflow_dispatch:
 
 permissions:
   contents: read
