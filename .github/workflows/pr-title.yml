@@ -4,6 +4,14 @@ name: PR title
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  # Started by the release workflow for the release pull request, which does not trigger
+  # `pull_request` (see ci.yml).
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Title of the pull request to check
+        required: true
+        type: string
 
 permissions:
   pull-requests: read
@@ -12,6 +20,13 @@ jobs:
   conventional:
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+      - if: github.event_name == 'pull_request'
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: github.event_name == 'workflow_dispatch'
+        env:
+          TITLE: ${{ inputs.title }}
+        run: |
+          echo "$TITLE"
+          printf '%s' "$TITLE" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+'
