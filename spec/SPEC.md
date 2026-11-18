@@ -84,6 +84,31 @@ the work and refuse when denied, hit when the work fails, reset when it succeeds
 Sequence vectors mark these steps with `op: "peek"` or `op: "reset"`; a step without `op` is a
 hit. Reset steps have no `expect`.
 
+## Recipes
+
+Two compositions of check, peek and reset are common enough to have a fixed meaning. They add
+no state and no store operation.
+
+**Combined check** applies an ordered list of limits, each a limiter and an id, to one request:
+
+1. Peek every limit, in order. If any is denied, nothing is counted: the result is denied, and
+   its governing decision is the denied peek with the largest `retry_after_ms` (the first, on
+   a tie).
+2. Otherwise check every limit, in order. If one is denied, stop: the limits after it are not
+   counted, the ones before it stay counted, and that decision governs.
+3. If all are allowed, the governing decision is the one with the smallest `remaining` (the
+   first, on a tie; a `null` remaining never governs over a number).
+
+Step 2 can deny after step 1 allowed, because a peek is advisory: the combination is not
+atomic. It needs stores that can peek.
+
+**Lockout** counts only failed attempts against a limiter, for an id and a verification:
+
+1. Peek. If denied, the verification does not run and the result is that denial.
+2. Run the verification. If it raises, nothing is counted.
+3. If it succeeds, reset the id, unless told not to. If it fails, check the id: that decision
+   is reported, and it is allowed unless a concurrent attempt took the last unit.
+
 ## State format 1
 
 Key: `ol:1:<scope>:<L>-<W>-<B>:<hash>`, where `hash` is the first 32 hex characters of

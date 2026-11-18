@@ -3,6 +3,7 @@ repo_url: https://github.com/PabloAlaniz/omnilimit
 nav:
   - Home: index.md
   - Adapters: adapters.md
+  - Recipes: recipes.md
   - Stores: stores.md
   - Client IP: client-ip.md
   - Conformance matrix: matrix.md
