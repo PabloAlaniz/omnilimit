@@ -263,6 +263,16 @@ describe('checkAll', () => {
     expect((await user.peek('u')).remaining).toBe(5);
   });
 
+  it('weighs each limit by its own cost', async () => {
+    const { ip, user } = pair(10, 10);
+    const first = await checkAll([{ limiter: ip, id: 'a' }, { limiter: user, id: 'u', cost: 6 }]);
+    expect(first.decisions.map((d) => d.remaining)).toEqual([9, 4]);
+    // 6 more do not fit under the user limit, so the ip limit is not spent either.
+    const second = await checkAll([{ limiter: ip, id: 'a' }, { limiter: user, id: 'u', cost: 6 }]);
+    expect(second.allowed).toBe(false);
+    expect((await ip.peek('a')).remaining).toBe(9);
+  });
+
   it('follows onStoreError, needs a list and a store that can peek', async () => {
     const down: Store = { tier: 'exact', hit: () => Promise.reject(new Error('down')), peek: () => Promise.reject(new Error('down')) };
     const closed = createLimiter({ store: down, scope: 'c', limit: 1, windowMs: 1000, onStoreError: 'closed' });

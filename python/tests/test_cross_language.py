@@ -46,7 +46,10 @@ def typescript(store: str, url: str, vector: dict[str, Any], salt: str, steps: l
         "policy": vector["policy"],
         "scope": vector["scope"],
         "salt": salt,
-        "steps": [{"id": step["id"], "at_ms": step["at_ms"]} for step in steps],
+        "steps": [
+            {"id": step["id"], "at_ms": step["at_ms"], "cost": step.get("cost", 1)}
+            for step in steps
+        ],
     }
     result = subprocess.run(
         ["node", str(SCRIPT)],
@@ -90,7 +93,7 @@ def alternate(store_name: str, url: str, store: Any, vector: dict[str, Any]) -> 
     )
     for index, step in enumerate(vector["steps"]):
         if index % 2 == 0:
-            got = view(limiter.check(step["id"], now_ms=step["at_ms"]))
+            got = view(limiter.check(step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1)))
         else:
             got = typescript(store_name, url, vector, salt, [step])[0]
         assert got == expected(step), f"{vector['id']} step {index}"

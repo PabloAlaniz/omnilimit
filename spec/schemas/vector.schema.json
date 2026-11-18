@@ -32,6 +32,7 @@
                 "at_ms": { "type": "integer" },
                 "id": { "type": "string" },
                 "op": { "enum": ["peek", "reset"], "description": "Absent means hit." },
+                "cost": { "type": "integer", "minimum": 2, "description": "Absent means 1." },
                 "expect": {
                   "allOf": [
                     { "$ref": "#/definitions/decision" },
@@ -102,7 +103,7 @@
     },
     {
       "if": { "properties": { "kind": { "const": "contract" } } },
-      "then": { "required": ["subject", "cases"], "properties": { "subject": { "enum": ["policy", "scope", "shorthand", "approximate"] } } }
+      "then": { "required": ["subject", "cases"], "properties": { "subject": { "enum": ["policy", "scope", "cost", "shorthand", "approximate"] } } }
     }
   ],
   "definitions": {

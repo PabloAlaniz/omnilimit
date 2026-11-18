@@ -42,7 +42,7 @@ const limiter = createLimiter({
 
 const decisions = [];
 for (const step of request.steps) {
-  const d = await limiter.check(step.id, { nowMs: step.at_ms });
+  const d = await limiter.check(step.id, { nowMs: step.at_ms, cost: step.cost ?? 1 });
   decisions.push({
     allowed: d.allowed,
     reason: d.reason,

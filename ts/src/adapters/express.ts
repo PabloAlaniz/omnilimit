@@ -35,6 +35,8 @@ export interface ExpressRateLimitOptions<Req extends ExpressRequestLike = Expres
   onMissingKey: MissingKeyPolicy;
   /** Return `true` to let a request through without counting it. */
   skip?: (context: ExpressKeyContext & { req: Req }) => boolean | Promise<boolean>;
+  /** How many units this request weighs, from 1 to the limiter's burst. Defaults to 1. */
+  cost?: (context: ExpressKeyContext & { req: Req }) => number | Promise<number>;
   /**
    * Answer a denied request yourself, for example in your API's error format. The denial headers
    * are already set on `res`. If it throws, the error goes to `next`. Defaults to

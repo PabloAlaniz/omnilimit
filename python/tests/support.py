@@ -99,9 +99,9 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
             continue
         recording.raw = None
         if op == "peek":
-            decision = limiter.peek(step["id"], now_ms=step["at_ms"])
+            decision = limiter.peek(step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1))
         else:
-            decision = limiter.check(step["id"], now_ms=step["at_ms"])
+            decision = limiter.check(step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1))
         got = outcome(decision, recording.raw, recording.profiles)
         assert got == step["expect"], f"{vector['id']} step {index}"
 
@@ -143,9 +143,13 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
             continue
         recording.raw = None
         if op == "peek":
-            decision = await limiter.peek(step["id"], now_ms=step["at_ms"])
+            decision = await limiter.peek(
+                step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1)
+            )
         else:
-            decision = await limiter.check(step["id"], now_ms=step["at_ms"])
+            decision = await limiter.check(
+                step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1)
+            )
         got = outcome(decision, recording.raw, recording.profiles)
         assert got == step["expect"], f"{vector['id']} step {index}"
 

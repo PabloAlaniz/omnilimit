@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, Literal, TypeVar
 
-from omnilimit._gcra import assert_scope, resolve_policy, view_of
+from omnilimit._gcra import assert_cost, assert_scope, resolve_policy, view_of
 from omnilimit._headers import build_headers
 from omnilimit._key import derive_key
 from omnilimit._types import (
@@ -20,6 +20,7 @@ from omnilimit._types import (
     EventHook,
     HeaderInput,
     HeaderOption,
+    HitParams,
     LimiterEvent,
     OnStoreError,
     Op,
@@ -95,7 +96,29 @@ class _Core:
         built = self.headers(data) if callable(self.headers) else build_headers(self.headers, data)
         return replace(decision, headers=built)
 
-    def from_hit(self, hit: RawHit, op: Op = "check") -> Decision:
+    def weighed(self, cost: int) -> HitParams:
+        """What the store receives for a request of this cost.
+
+        Stores add `window_ms` per hit, so a request that weighs `cost` units is the same hit
+        with `cost * window_ms` in its place.
+        """
+        if cost == 1 and not isinstance(cost, bool):
+            return self.policy
+        assert_cost(cost, self.policy)
+        if self.tier == "approximate":
+            raise TypeError(
+                "omnilimit: this store (tier approximate) only counts requests: "
+                "it cannot weigh a cost"
+            )
+        policy = self.policy
+        return HitParams(
+            limit=policy.limit,
+            window_ms=policy.window_ms * cost,
+            capacity=policy.capacity,
+            drain_ms=policy.drain_ms,
+        )
+
+    def from_hit(self, hit: RawHit, op: Op = "check", amount: int | None = None) -> Decision:
         event_type: Literal["allowed", "limited"] = "allowed" if hit.allowed else "limited"
         self._emit(LimiterEvent(event_type, self.scope, self.tier, op=op))
         base = Decision(
@@ -114,7 +137,7 @@ class _Core:
                     hit.retry_after_ms if hit.retry_after_ms is not None else self.policy.window_ms
                 )
             return self._finish(replace(base, retry_after_ms=retry_after_ms), retry_after_ms or 0)
-        view = view_of(hit.allowed, hit.level, self.policy)
+        view = view_of(hit.allowed, hit.level, self.policy, amount)
         decision = replace(
             base,
             remaining=view.remaining,
@@ -238,19 +261,25 @@ class Limiter:
             return call()
         return _run_with_timeout(call, self._core.timeout_s, self._slots)
 
-    def _decide(self, op: Op, call: Callable[[], RawHit]) -> Decision:
+    def _decide(self, op: Op, call: Callable[[], RawHit], amount: int | None = None) -> Decision:
         try:
             hit = self._call(call)
         except Exception as error:
             return self._core.from_failure(error, op)
-        return self._core.from_hit(hit, op)
+        return self._core.from_hit(hit, op, amount)
 
-    def check(self, id_value: str, *, now_ms: int | None = None) -> Decision:
-        """Count one request for `id_value`. `now_ms` exists for conformance vectors only."""
+    def check(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
+        """Count one request for `id_value`.
+
+        `cost` makes it weigh several units, such as a batch of items: an integer from 1 to the
+        burst, anything else raises `ValueError`. A denied request counts nothing, whatever its
+        cost. `now_ms` exists for conformance vectors only.
+        """
+        params = self._core.weighed(cost)
         key = self._core.key(id_value)
-        return self._decide("check", lambda: self._store.hit(key, self._core.policy, now_ms))
+        return self._decide("check", lambda: self._store.hit(key, params, now_ms), params.window_ms)
 
-    def peek(self, id_value: str, *, now_ms: int | None = None) -> Decision:
+    def peek(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """The decision `check` would give now, without counting.
 
         When allowed, `remaining` includes the request asked about. It is advisory: a concurrent
@@ -258,8 +287,9 @@ class Limiter:
         Raises `TypeError` if the store cannot peek; store failures follow `on_store_error`.
         """
         peek = _store_method(self._store, "peek")
+        params = self._core.weighed(cost)
         key = self._core.key(id_value)
-        return self._decide("peek", lambda: peek(key, self._core.policy, now_ms))
+        return self._decide("peek", lambda: peek(key, params, now_ms), params.window_ms)
 
     def reset(self, id_value: str) -> bool:
         """Forget everything counted for `id_value`.
@@ -326,23 +356,27 @@ class AsyncLimiter:
             return await asyncio.wait_for(result, self._core.timeout_s)
         return result
 
-    async def _decide(self, op: Op, call: Callable[[], Any]) -> Decision:
+    async def _decide(self, op: Op, call: Callable[[], Any], amount: int | None = None) -> Decision:
         try:
             hit: RawHit = await self._call(call)
         except Exception as error:
             return self._core.from_failure(error, op)
-        return self._core.from_hit(hit, op)
+        return self._core.from_hit(hit, op, amount)
 
-    async def check(self, id_value: str, *, now_ms: int | None = None) -> Decision:
-        """Count one request for `id_value`. `now_ms` exists for conformance vectors only."""
+    async def check(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
+        """Count one request for `id_value`. See `Limiter.check`."""
+        params = self._core.weighed(cost)
         key = self._core.key(id_value)
-        return await self._decide("check", lambda: self._store.hit(key, self._core.policy, now_ms))
+        return await self._decide(
+            "check", lambda: self._store.hit(key, params, now_ms), params.window_ms
+        )
 
-    async def peek(self, id_value: str, *, now_ms: int | None = None) -> Decision:
+    async def peek(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """The decision `check` would give now, without counting. See `Limiter.peek`."""
         peek = _store_method(self._store, "peek")
+        params = self._core.weighed(cost)
         key = self._core.key(id_value)
-        return await self._decide("peek", lambda: peek(key, self._core.policy, now_ms))
+        return await self._decide("peek", lambda: peek(key, params, now_ms), params.window_ms)
 
     async def reset(self, id_value: str) -> bool:
         """Forget everything counted for `id_value`. See `Limiter.reset`."""

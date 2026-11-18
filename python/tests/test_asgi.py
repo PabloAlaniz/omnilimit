@@ -122,6 +122,19 @@ def test_the_limiter_can_be_chosen_per_request() -> None:
     assert [client.get("/", headers=pro).status_code for _ in range(3)] == [200, 200, 429]
 
 
+@both
+def test_cost_weighs_a_request_by_what_it_carries(limiter: Any) -> None:
+    weighed = type(limiter)(**{**POLICY, "limit": 5}, store=MemoryStore())
+    client = _client(
+        limiter=weighed,
+        key=lambda _: "k",
+        cost=lambda context: int(context.headers.get("x-items", "1")),
+    )
+    assert client.get("/", headers={"x-items": "3"}).headers["ratelimit"] == '"t";r=2;t=36'
+    assert client.get("/", headers={"x-items": "3"}).status_code == 429
+    assert client.get("/", headers={"x-items": "2"}).status_code == 200
+
+
 def test_rotating_the_left_of_x_forwarded_for_does_not_evade() -> None:
     client = _client(limiter=Limiter(**POLICY, store=MemoryStore()), key=ip_key(xff_hops=0))
     assert client.get("/", headers={"x-forwarded-for": "6.6.6.6, 203.0.113.9"}).status_code == 200

@@ -95,6 +95,7 @@ class DeniedResponse:
 
 KeyFn = Callable[[AsgiContext], "Awaitable[str | None] | str | None"]
 SkipFn = Callable[[AsgiContext], "Awaitable[bool] | bool"]
+CostFn = Callable[[AsgiContext], "Awaitable[int] | int"]
 LimiterFn = Callable[[AsgiContext], "Awaitable[Limiter | AsyncLimiter] | Limiter | AsyncLimiter"]
 OnDenied = Callable[[AsgiContext, Denial], "Awaitable[DeniedResponse] | DeniedResponse"]
 
@@ -131,7 +132,8 @@ class RateLimitMiddleware:
     """Limit every HTTP request that reaches `app`. See the module docstring.
 
     `limiter` may be a blocking `Limiter`, which then runs in a worker thread, an
-    `AsyncLimiter`, or a function of the context that returns either.
+    `AsyncLimiter`, or a function of the context that returns either. `cost` returns how many
+    units a request weighs, from 1 to the limiter's burst.
     """
 
     def __init__(
@@ -143,6 +145,7 @@ class RateLimitMiddleware:
         on_missing_key: MissingKeyPolicy,
         skip: SkipFn | None = None,
         on_denied: OnDenied | None = None,
+        cost: CostFn | None = None,
     ) -> None:
         check_policy(on_missing_key)
         self.app = app
@@ -151,6 +154,7 @@ class RateLimitMiddleware:
         self._on_missing_key: MissingKeyPolicy = on_missing_key
         self._skip = skip
         self._on_denied = on_denied
+        self._cost = cost
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -182,10 +186,11 @@ class RateLimitMiddleware:
         limiter = self._limiter
         if not isinstance(limiter, Limiter | AsyncLimiter):
             limiter = await _resolved(limiter(context))
+        weight = 1 if self._cost is None else await _resolved(self._cost(context))
         if isinstance(limiter, AsyncLimiter):
-            decision = await limiter.check(target)
+            decision = await limiter.check(target, cost=weight)
         else:
-            decision = await asyncio.to_thread(limiter.check, target)
+            decision = await asyncio.to_thread(limiter.check, target, cost=weight)
         if not decision.allowed:
             await self._deny(context, denial_of(decision), send)
             return

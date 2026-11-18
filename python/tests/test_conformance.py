@@ -200,6 +200,34 @@ def test_policy_validation(case: dict[str, Any]) -> None:
             resolve_policy(**case["policy"])
 
 
+@pytest.mark.parametrize("case", _contract("cost")["cases"], ids=lambda c: json.dumps(c))
+def test_cost_validation(case: dict[str, Any]) -> None:
+    limiter = Limiter(
+        **_contract("cost")["policy"], store=MemoryStore(), scope="c", on_store_error="closed"
+    )
+    if case["valid"]:
+        assert limiter.peek("x", cost=case["cost"]).allowed
+        assert limiter.check("x", cost=case["cost"]).allowed
+    else:
+        with pytest.raises(ValueError, match="omnilimit: cost"):
+            limiter.check("x", cost=case["cost"])
+        with pytest.raises(ValueError, match="omnilimit: cost"):
+            limiter.peek("x", cost=case["cost"])
+
+
+def test_cost_validation_async() -> None:
+    async def run() -> None:
+        limiter = AsyncLimiter(
+            **_contract("cost")["policy"], store=MemoryStore(), scope="c", on_store_error="closed"
+        )
+        assert (await limiter.check("x", cost=4)).allowed
+        assert not (await limiter.peek("x", cost=1)).allowed
+        with pytest.raises(ValueError, match="omnilimit: cost"):
+            await limiter.check("x", cost=5)
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("case", _contract("shorthand")["cases"], ids=lambda c: repr(c["text"]))
 def test_policy_shorthand(case: dict[str, Any]) -> None:
     if case["policy"] is None:

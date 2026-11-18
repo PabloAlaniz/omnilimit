@@ -30,6 +30,8 @@ export interface WebRateLimitOptions<Extra = unknown> {
   onMissingKey: MissingKeyPolicy;
   /** Return `true` to let a request through without counting it. */
   skip?: (context: WebKeyContext<Extra>) => boolean | Promise<boolean>;
+  /** How many units this request weighs, from 1 to the limiter's burst. Defaults to 1. */
+  cost?: (context: WebKeyContext<Extra>) => number | Promise<number>;
   /**
    * The TCP peer, when your runtime exposes it. Without it the `direct` preset finds no
    * address. A Fetch API `Request` does not carry one.

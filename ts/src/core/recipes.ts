@@ -4,6 +4,8 @@ import type { Decision, Limiter } from './types.js';
 export interface LimitEntry {
   limiter: Limiter;
   id: string;
+  /** How many units this request weighs under this limit. Defaults to 1. */
+  cost?: number;
 }
 
 export interface CombinedDecision {
@@ -16,6 +18,8 @@ export interface CombinedDecision {
   /** Every decision taken, in the order given. Shorter than the input when a step denied. */
   decisions: Decision[];
 }
+
+const options = (cost: number | undefined) => (cost === undefined ? {} : { cost });
 
 function longestWait(decisions: Decision[]): Decision {
   let governing = decisions[0] as Decision;
@@ -46,13 +50,13 @@ function fewestLeft(decisions: Decision[]): Decision {
 export async function checkAll(entries: readonly LimitEntry[]): Promise<CombinedDecision> {
   if (entries.length === 0) throw new RangeError('omnilimit: checkAll needs at least one limit');
   const peeks: Decision[] = [];
-  for (const { limiter, id } of entries) peeks.push(await limiter.peek(id));
+  for (const { limiter, id, cost } of entries) peeks.push(await limiter.peek(id, options(cost)));
   const refused = peeks.filter((decision) => !decision.allowed);
   if (refused.length > 0) return { allowed: false, decision: longestWait(refused), decisions: peeks };
 
   const decisions: Decision[] = [];
-  for (const { limiter, id } of entries) {
-    const decision = await limiter.check(id);
+  for (const { limiter, id, cost } of entries) {
+    const decision = await limiter.check(id, options(cost));
     decisions.push(decision);
     if (!decision.allowed) return { allowed: false, decision, decisions };
   }

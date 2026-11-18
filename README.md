@@ -112,6 +112,16 @@ if (!allowed) return new Response(null, { status: decision.status ?? 429, header
 
 `decision` is the one to answer with: the longest wait when denied, the fewest units left when allowed. Both recipes are built on `peek`, which is advisory, so they need an `exact` or `local` store and are not atomic: see [recipes](docs/recipes.md).
 
+### Requests that weigh more than one
+
+A batch of 20 items, or a call that costs more than the rest, can count as several units:
+
+```ts
+const decision = await limiter.check(userId, { cost: items.length });
+```
+
+A denied request counts nothing, whatever its cost. The cost is an integer from 1 to the `burst`; a larger one could never pass, so it throws instead of denying. Adapters take `cost: (context) => number`.
+
 ### Limits from configuration
 
 A policy can come from a string, with the same strict grammar in every port:

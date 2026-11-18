@@ -33,10 +33,22 @@ CORE = [
     ),
     ("clock regression refunds quota", "_gcra.py", "t = max(now_ms, ts)", "t = now_ms"),
     (
+        "cost is ignored",
+        "_limiter.py",
+        "window_ms=policy.window_ms * cost,",
+        "window_ms=policy.window_ms,",
+    ),
+    (
+        "cost above the burst is accepted",
+        "_gcra.py",
+        "if not _is_positive_int(cost) or cost > policy.burst:",
+        "if not _is_positive_int(cost):",
+    ),
+    (
         "check_all counts before looking",
         "_recipes.py",
-        "_refusal([limiter.peek(id_value) for limiter, id_value in entries])",
-        "_refusal([limiter.check(id_value) for limiter, id_value in entries])",
+        "_refusal([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
+        "_refusal([entry[0].check(entry[1], cost=_cost(entry)) for entry in entries])",
     ),
     (
         "lockout counts successes",

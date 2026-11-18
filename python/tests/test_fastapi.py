@@ -297,6 +297,43 @@ def test_the_limiter_function_is_not_asked_for_a_skipped_request() -> None:
     assert client.get("/").status_code == 200
 
 
+@both
+def test_cost_weighs_a_request_by_what_it_carries(limiter: Any) -> None:
+    def cost(context: KeyContext) -> int:
+        return int(context.headers.get("x-items", "1"))
+
+    weighed = type(limiter)(**{**POLICY, "limit": 5}, store=MemoryStore())
+    client = _app(rate_limit(weighed, key=lambda _: "k", on_missing_key="reject", cost=cost))
+    first = client.get("/", headers={"x-items": "3"})
+    assert first.headers["ratelimit"] == '"t";r=2;t=36'
+    assert client.get("/", headers={"x-items": "3"}).status_code == 429
+    assert client.get("/", headers={"x-items": "2"}).status_code == 200
+    with pytest.raises(ValueError, match="omnilimit: cost"):
+        client.get("/", headers={"x-items": "9"})
+
+
+def test_cost_may_be_async_and_reaches_a_limiter_chosen_per_request() -> None:
+    blocking = Limiter(**{**POLICY, "limit": 4}, store=MemoryStore())
+
+    async def cost(context: KeyContext) -> int:
+        return 2
+
+    client = _app(
+        rate_limit(lambda _: blocking, key=lambda _: "k", on_missing_key="reject", cost=cost)
+    )
+    assert [client.get("/").status_code for _ in range(3)] == [200, 200, 429]
+
+
+def test_an_async_cost_needs_an_async_limiter() -> None:
+    async def cost(context: KeyContext) -> int:
+        return 1
+
+    limiter = Limiter(**POLICY, store=MemoryStore())
+    client = _app(rate_limit(limiter, key=lambda _: "k", on_missing_key="reject", cost=cost))
+    with pytest.raises(TypeError, match="AsyncLimiter"):
+        client.get("/")
+
+
 def test_peer_key_uses_the_connection() -> None:
     limiter = Limiter(**POLICY, store=MemoryStore())
     client = _app(rate_limit(limiter, key=ip_key(use_peer=True), on_missing_key="reject"))

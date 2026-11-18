@@ -1,6 +1,6 @@
 # Adapters
 
-Every adapter takes the same four things: a `limiter`, a `key`, `onMissingKey`, and optionally `onDenied` and `skip`.
+Every adapter takes the same things: a `limiter`, a `key`, `onMissingKey`, and optionally `onDenied`, `skip` and `cost`.
 
 | Runtime | Import | Shape |
 |---|---|---|
@@ -144,6 +144,20 @@ Depends(rate_limit(limiter, key=key, on_missing_key="shared", skip=lambda ctx: c
 ```
 
 Keep the condition narrow. A `skip` that is true in production is a limit that does nothing, and unlike a store failure it emits no event.
+
+## Requests that weigh more than one
+
+`cost` returns how many units a request spends, for endpoints that do several things at once:
+
+```ts
+rateLimit({ limiter, key, onMissingKey: 'shared', cost: async ({ c }) => (await c.req.json()).items.length });
+```
+
+```python
+Depends(rate_limit(limiter, key=key, on_missing_key="shared", cost=lambda ctx: int(ctx.headers["x-items"])))
+```
+
+It must be an integer from 1 to the limiter's burst, so validate or clamp what the client sends before returning it: anything else raises. A store of tier `approximate` accepts no cost other than 1.
 
 ## Writing your own key
 

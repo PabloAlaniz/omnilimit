@@ -201,6 +201,21 @@ describe('web', () => {
     expect((await webCheck(request(), withPeer, { address: '198.51.100.10' })).denied).toBeUndefined();
   });
 
+  it('cost weighs a request by what it carries', async () => {
+    const options = {
+      limiter: limiter(5),
+      key: webIpKey({ preset: 'cloudflare' }),
+      onMissingKey: 'reject' as const,
+      cost: async ({ request: r }: { request: Request }) => Number(r.headers.get('x-items') ?? 1),
+    };
+    const batch = (items: number) =>
+      new Request('https://x.test/', { headers: { ...cf('203.0.113.1'), 'x-items': String(items) } });
+    expect((await webCheck(batch(3), options)).headers?.ratelimit).toBe('"a";r=2;t=36');
+    expect((await webCheck(batch(3), options)).denied?.status).toBe(429);
+    expect((await webCheck(batch(2), options)).denied).toBeUndefined();
+    await expect(webCheck(batch(9), options)).rejects.toThrow(RangeError);
+  });
+
   it('wraps a fetch-style handler and hands its second argument on as extra', async () => {
     const env: Env = { limiter: limiter(1) };
     const handler = webWrap(async (_request: Request, e: Env) => new Response(e.off ? 'off' : 'on'), {

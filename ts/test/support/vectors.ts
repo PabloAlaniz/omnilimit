@@ -69,8 +69,8 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
     }
     const decision =
       step.op === 'peek'
-        ? await limiter.peek(step.id, { nowMs: step.at_ms })
-        : await limiter.check(step.id, { nowMs: step.at_ms });
+        ? await limiter.peek(step.id, { nowMs: step.at_ms, ...(step.cost ? { cost: step.cost } : {}) })
+        : await limiter.check(step.id, { nowMs: step.at_ms, ...(step.cost ? { cost: step.cost } : {}) });
     const { expect: want } = step;
     expect(
       {
