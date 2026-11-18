@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.3.0...ts-v0.3.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* memory store follows fake timers installed after it was created ([#21](https://github.com/PabloAlaniz/omnilimit/issues/21)) ([1b99a2e](https://github.com/PabloAlaniz/omnilimit/commit/1b99a2ed96a497ed63040c8e1f0e6b868035c625))
+
 ## [0.3.0](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.2.0...ts-v0.3.0) (2026-11-18)
 
 
