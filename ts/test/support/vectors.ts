@@ -6,7 +6,16 @@ import { resolvePolicy } from '../../src/core/gcra.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { buildHeaders } from '../../src/core/headers.js';
 import { deriveKey } from '../../src/core/key.js';
-import { checkAll, createLockout, type CombinedDecision, type Lockout } from '../../src/core/recipes.js';
+import {
+  checkAll,
+  createLockout,
+  peekAll,
+  reserveAll,
+  SettledError,
+  type CombinedDecision,
+  type Lockout,
+  type Pending,
+} from '../../src/core/recipes.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
 import type { Decision, HitParams, Limiter, RawHit, RawRefund, Reservation, Store } from '../../src/core/types.js';
 
@@ -148,15 +157,16 @@ function combined(result: CombinedDecision) {
   return { allowed: result.allowed, governing, decisions: result.decisions.map(shortDecision) };
 }
 
-/** The error kinds of recipe vectors. `state` is reserved, so meeting it here is a failure. */
+/** The error kinds of recipe vectors. Anything else is a failure. */
 function errorKind(thrown: unknown, fromVerify: unknown): string {
   if (thrown === fromVerify) return 'verify';
+  if (thrown instanceof SettledError) return 'state';
   if (thrown instanceof RangeError) return 'value';
   if (thrown instanceof TypeError) return 'type';
   throw thrown;
 }
 
-type Call = { op: 'peek' | 'hit' | 'reset'; limiter: string; id: string; failed?: true };
+type Call = { op: 'peek' | 'hit' | 'reset' | 'refund'; limiter: string; id: string; failed?: true };
 
 /**
  * Run one recipe vector. Each limiter's store is the one under test seen through a wrapper that
@@ -197,6 +207,9 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
       hit: (k, params) => call('hit', k, () => inner.hit(k, params, now)),
       ...(inner.peek ? { peek: (k: string, params: HitParams) => call('peek', k, () => inner.peek!(k, params, now)) } : {}),
       ...(inner.reset ? { reset: (k: string) => call('reset', k, () => inner.reset!(k)) } : {}),
+      ...(inner.refund
+        ? { refund: (k: string, params: HitParams, sinceMs: number) => call('refund', k, () => inner.refund!(k, params, sinceMs, now)) }
+        : {}),
     };
     limiters[name] = createLimiter({
       ...toPolicy(config.policy),
@@ -217,6 +230,8 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
   }
 
   const withCost = (cost: number | undefined) => (cost === undefined ? {} : { cost });
+  const entriesOf = (step: Vector) => step.entries.map((e: Vector) => ({ limiter: limiters[e.limiter]!, id: e.id, ...withCost(e.cost) }));
+  const handles = new Map<string, Pending>();
   for (const [index, step] of timeline.entries()) {
     const context = `${vector.id} step ${index} (${step.op})`;
     if (step.at_ms !== undefined) now = step.at_ms;
@@ -241,9 +256,24 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
     try {
       switch (step.op) {
         case 'check_all':
-          got['result'] = combined(
-            await checkAll(step.entries.map((e: Vector) => ({ limiter: limiters[e.limiter]!, id: e.id, ...withCost(e.cost) }))),
-          );
+          got['result'] = combined(await checkAll(entriesOf(step)));
+          break;
+        case 'peek_all':
+        case 'reserve_all': {
+          const opened = await (step.op === 'peek_all' ? peekAll : reserveAll)(entriesOf(step));
+          expect(opened.mode, context).toBe(step.op === 'peek_all' ? 'peek' : 'reserve');
+          expect(opened.settled, context).toBe(false);
+          handles.set(step.handle, opened);
+          got['result'] = { ...combined(opened), refunded: opened.refunded };
+          break;
+        }
+        case 'commit':
+          got['result'] = combined(await handles.get(step.handle)!.commit());
+          expect(handles.get(step.handle)!.settled, context).toBe(true);
+          break;
+        case 'cancel':
+          got['result'] = await handles.get(step.handle)!.cancel();
+          expect(handles.get(step.handle)!.settled, context).toBe(true);
           break;
         case 'attempt': {
           const attempt = await lockouts[step.lockout]!.attempt(step.ids[0], () => {

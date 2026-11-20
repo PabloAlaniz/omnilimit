@@ -17,6 +17,7 @@ const DEFAULT_STORE_TIMEOUT_MS = 1000;
 const STORE_ERROR_RETRY_MS = 1000;
 // A registered symbol, so that a limiter from one bundle is understood by recipes from another.
 const ASSERT_COST = Symbol.for('omnilimit.assertCost');
+const ASSERT_REFUND = Symbol.for('omnilimit.assertRefund');
 
 /**
  * Validate a cost for this limiter without calling its store, as recipes must before their first
@@ -24,6 +25,15 @@ const ASSERT_COST = Symbol.for('omnilimit.assertCost');
  */
 export function assertLimiterCost(limiter: Limiter, cost: number | undefined): void {
   (limiter as { [ASSERT_COST]?: (cost: number | undefined) => void })[ASSERT_COST]?.(cost);
+}
+
+/**
+ * Throw the `TypeError` that `reserve` would if this limiter's store cannot refund, without calling
+ * it, as recipes must before their first store call. A limiter not made by `createLimiter` is
+ * judged by its tier alone.
+ */
+export function assertLimiterRefund(limiter: Limiter): void {
+  (limiter as { [ASSERT_REFUND]?: () => void })[ASSERT_REFUND]?.();
 }
 
 async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
@@ -210,5 +220,10 @@ export function createLimiter(options: LimiterOptions): Limiter {
     },
   };
   Object.defineProperty(limiter, ASSERT_COST, { value: (cost: number | undefined) => void weighed(cost) });
+  Object.defineProperty(limiter, ASSERT_REFUND, {
+    value: () => {
+      if (!store.refund) throw unsupported('refund');
+    },
+  });
   return limiter;
 }

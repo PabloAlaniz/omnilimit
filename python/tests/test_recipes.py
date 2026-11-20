@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -15,8 +17,13 @@ from omnilimit import (
     Lockout,
     MemoryStore,
     RawHit,
+    SettledError,
     check_all,
     check_all_async,
+    peek_all,
+    peek_all_async,
+    reserve_all,
+    reserve_all_async,
 )
 
 
@@ -271,3 +278,134 @@ def test_async_lockout() -> None:
         assert (await keeping.attempt("other", lambda: True)).verified is True
 
     asyncio.run(run())
+
+
+class Slow:
+    """A memory store whose hits and refunds take a while, so settlements overlap."""
+
+    tier = "exact"
+
+    def __init__(self) -> None:
+        self.inner = MemoryStore()
+        self.calls: list[str] = []
+
+    def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        self.calls.append("hit")
+        time.sleep(0.05)
+        return self.inner.hit(key, params, now_ms)
+
+    def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        return self.inner.peek(key, params, now_ms)
+
+    def refund(self, key: str, params: HitParams, since: int, now_ms: int | None = None) -> Any:
+        self.calls.append("refund")
+        time.sleep(0.05)
+        return self.inner.refund(key, params, since, now_ms)
+
+
+def test_concurrent_commits_share_one_result() -> None:
+    store = Slow()
+    limiter = Limiter(store=store, scope="s", limit=5, window_ms=60_000, on_store_error="closed")
+    pending = peek_all([(limiter, "a"), (limiter, "b")])
+    assert not pending.settled
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: pending.commit(), range(4)))
+    assert all(result is results[0] for result in results)
+    assert pending.settled
+    assert store.calls == ["hit", "hit"]
+    with pytest.raises(SettledError, match="commit"):
+        pending.cancel()
+
+
+def test_reserve_all_cancel_refunds_once_and_refuses_commit() -> None:
+    store = Slow()
+    limiter = Limiter(store=store, scope="s", limit=5, window_ms=60_000, on_store_error="closed")
+    pending = reserve_all([(limiter, "a"), (limiter, "b", 2)])
+    assert pending.mode == "reserve"
+    assert pending.refunded == (None, None)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.map(lambda _: pending.cancel(), range(2))
+    assert first is second
+    assert first.refunded == (True, True)
+    assert store.calls.count("refund") == 2
+    with pytest.raises(SettledError):
+        pending.commit()
+    assert isinstance(SettledError("x"), RuntimeError)
+    assert limiter.peek("b").remaining == 5
+
+
+class OldStore:
+    """An exact store written before refund existed."""
+
+    tier = "exact"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        self.calls += 1
+        return RawHit(allowed=True, level=0, ts=0)
+
+    def peek(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        return RawHit(allowed=True, level=0, ts=0)
+
+
+def test_reserve_all_needs_every_store_to_refund_before_any_call() -> None:
+    old = OldStore()
+    counted = Limiter(store=old, scope="old", limit=1, window_ms=1000, on_store_error="closed")
+    ip, _, _ = _pair(5, 5)
+    with pytest.raises(TypeError, match="refund"):
+        reserve_all([(counted, "x"), (ip, "a")])
+    with pytest.raises(TypeError, match="refund"):
+        reserve_all([(ip, "a"), (counted, "x")])
+    assert old.calls == 0
+    assert ip.peek("a").remaining == 5
+    assert peek_all([(counted, "x")]).allowed
+
+
+def test_async_pending_settles_once() -> None:
+    async def run() -> None:
+        ip, user, _ = _pair(5, 1, AsyncLimiter)
+        pending = await peek_all_async([(ip, "a"), (user, "u")])
+        first, second = await asyncio.gather(pending.commit(), pending.commit())
+        assert first is second
+        assert first.allowed
+        with pytest.raises(SettledError):
+            await pending.cancel()
+        assert (await ip.peek("a")).remaining == 4
+
+        reserved = await reserve_all_async([(ip, "a"), (user, "u")])
+        assert not reserved.allowed
+        assert reserved.refunded == (True, None)
+        assert (await reserved.cancel()).refunded == (True, None)
+        assert (await reserved.cancel()).refunded == (True, None)
+        with pytest.raises(SettledError):
+            await reserved.commit()
+        assert (await ip.peek("a")).remaining == 4
+
+        kept = await reserve_all_async([(ip, "a")])
+        assert (await kept.commit()) is (await kept.commit())
+        assert (await ip.peek("a")).remaining == 3
+        cancelled = await reserve_all_async([(ip, "a")])
+        cancelling = asyncio.ensure_future(cancelled.cancel())
+        await asyncio.sleep(0)  # A coroutine settles when it starts running.
+        with pytest.raises(SettledError):
+            await cancelled.commit()
+        assert (await cancelling).refunded == (True,)
+        with pytest.raises(TypeError):
+            old = AsyncLimiter(
+                store=OldAsync(), scope="o", limit=1, window_ms=1000, on_store_error="open"
+            )
+            await reserve_all_async([(old, "x")])
+        denied = await peek_all_async([(user, "u")])
+        assert (await denied.cancel()).refunded == (None,)
+        assert not (await (await peek_all_async([(user, "u")])).commit()).allowed
+
+    asyncio.run(run())
+
+
+class OldAsync:
+    tier = "exact"
+
+    async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+        raise AssertionError("validation comes first")

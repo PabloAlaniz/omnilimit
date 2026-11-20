@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { checkAll, createLimiter, createLockout, memoryStore, SPEC_VERSION, type Store } from '../../src/index.js';
+import {
+  checkAll,
+  createLimiter,
+  createLockout,
+  memoryStore,
+  peekAll,
+  reserveAll,
+  SettledError,
+  SPEC_VERSION,
+  type Store,
+} from '../../src/index.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
 import { ipKey } from '../../src/adapters/shared.js';
 import { clientKey, maskIp, resolveClientIp } from '../../src/ip/index.js';
@@ -430,6 +440,62 @@ describe('checkAll', () => {
       onStoreError: 'open',
     });
     await expect(checkAll([{ limiter: approximate, id: 'x' }])).rejects.toThrow(TypeError);
+  });
+});
+
+describe('pending checks', () => {
+  const counting = () => {
+    const inner = memoryStore();
+    const calls: string[] = [];
+    const store: Store = {
+      tier: 'local',
+      hit: (k, p, n) => (calls.push('hit'), inner.hit(k, p, n)),
+      peek: (k, p, n) => (calls.push('peek'), inner.peek!(k, p, n)),
+      refund: (k, p, s, n) => (calls.push('refund'), inner.refund!(k, p, s, n)),
+    };
+    const make = (scope: string, limit: number) => createLimiter({ store, scope, limit, windowMs: 60_000, onStoreError: 'closed' });
+    return { calls, ip: make('ip', 5), user: make('user', 5) };
+  };
+
+  it('settles once: concurrent commits share one result and count once', async () => {
+    const { calls, ip, user } = counting();
+    const pending = await peekAll([{ limiter: ip, id: 'a' }, { limiter: user, id: 'u' }]);
+    expect(pending.settled).toBe(false);
+    calls.length = 0;
+    const [first, second] = await Promise.all([pending.commit(), pending.commit()]);
+    expect(first).toBe(second);
+    expect(pending.settled).toBe(true);
+    expect(calls).toEqual(['hit', 'hit']);
+    await expect(pending.cancel()).rejects.toBeInstanceOf(SettledError);
+  });
+
+  it('refuses the other settlement while the first is still running', async () => {
+    const { calls, ip, user } = counting();
+    const pending = await reserveAll([{ limiter: ip, id: 'a' }, { limiter: user, id: 'u' }]);
+    calls.length = 0;
+    const cancelling = pending.cancel();
+    const error = await pending.commit().catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(SettledError);
+    expect((error as Error).name).toBe('SettledError');
+    expect(await cancelling).toEqual({ refunded: [true, true] });
+    expect(await pending.cancel()).toEqual({ refunded: [true, true] });
+    expect(calls).toEqual(['refund', 'refund']);
+    expect((await ip.peek('a')).remaining).toBe(5);
+  });
+
+  it('reserveAll needs every store to refund, before any store call', async () => {
+    const { calls, ip } = counting();
+    // An exact store written before refund existed: it peeks and resets, but cannot refund.
+    const old = createLimiter({
+      store: { tier: 'exact', hit: async () => ({ allowed: true, level: 0, ts: 0 }), peek: async () => ({ allowed: true, level: 0, ts: 0 }) },
+      scope: 'old',
+      limit: 1,
+      windowMs: 1000,
+      onStoreError: 'closed',
+    });
+    await expect(reserveAll([{ limiter: ip, id: 'a' }, { limiter: old, id: 'x' }])).rejects.toThrow(TypeError);
+    expect(calls).toEqual([]);
+    expect((await peekAll([{ limiter: old, id: 'x' }])).allowed).toBe(true);
   });
 });
 

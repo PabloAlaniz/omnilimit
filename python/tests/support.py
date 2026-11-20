@@ -25,9 +25,14 @@ from omnilimit import (
     RawHit,
     RawRefund,
     Reservation,
+    SettledError,
     build_headers,
     check_all,
     check_all_async,
+    peek_all,
+    peek_all_async,
+    reserve_all,
+    reserve_all_async,
 )
 from omnilimit._gcra import resolve_policy
 from omnilimit._key import derive_key
@@ -293,9 +298,10 @@ class VerifyRaised(Exception):
 
 
 def _error_kind(error: Exception) -> str:
-    # `state` is reserved: meeting it here is a failure.
     if isinstance(error, VerifyRaised):
         return "verify"
+    if isinstance(error, SettledError):
+        return "state"
     if isinstance(error, ValueError):
         return "value"
     if isinstance(error, TypeError):
@@ -369,6 +375,7 @@ class RecipeHarness:
                 store_timeout_ms=self.timeout_ms,
             )
             self.raw[name] = (inner, policy, key)
+        self.handles: dict[str, Any] = {}
         self.lockouts: dict[str, Any] = {}
         for name, limits in vector.get("lockouts", {}).items():
             assert len(limits) == 1, "lockouts take one limit"
@@ -424,11 +431,18 @@ class RecipeHarness:
             async def areset(key: str) -> Any:
                 return await async_call("reset", key, lambda: inner.reset(key))
 
+            async def arefund(key: str, params: HitParams, since: int, now_ms: Any = None) -> Any:
+                return await async_call(
+                    "refund", key, lambda: inner.refund(key, params, since, harness.now)
+                )
+
             wrapped.hit = ahit
             if hasattr(inner, "peek"):
                 wrapped.peek = apeek
             if hasattr(inner, "reset"):
                 wrapped.reset = areset
+            if hasattr(inner, "refund"):
+                wrapped.refund = arefund
             return wrapped
 
         def hit(key: str, params: HitParams, now_ms: int | None = None) -> Any:
@@ -440,11 +454,16 @@ class RecipeHarness:
         def reset(key: str) -> Any:
             return sync_call("reset", key, lambda: inner.reset(key))
 
+        def refund(key: str, params: HitParams, since: int, now_ms: Any = None) -> Any:
+            return sync_call("refund", key, lambda: inner.refund(key, params, since, harness.now))
+
         wrapped.hit = hit
         if hasattr(inner, "peek"):
             wrapped.peek = peek
         if hasattr(inner, "reset"):
             wrapped.reset = reset
+        if hasattr(inner, "refund"):
+            wrapped.refund = refund
         return wrapped
 
     def before(self, step: dict[str, Any]) -> bool:
@@ -459,6 +478,19 @@ class RecipeHarness:
             return True
         self.calls = []
         return False
+
+    def opened(self, step: dict[str, Any], pending: Any) -> dict[str, Any]:
+        """Keep a pending under its handle, and report it like a combined result."""
+        assert pending.mode == step["op"][: -len("_all")]
+        assert not pending.settled
+        self.handles[step["handle"]] = pending
+        return {**_combined(pending), "refunded": list(pending.refunded)}
+
+    def settled(self, step: dict[str, Any], result: Any) -> dict[str, Any]:
+        assert self.handles[step["handle"]].settled
+        if step["op"] == "cancel":
+            return {"refunded": list(result.refunded)}
+        return _combined(result)
 
     def inspected(self, step: dict[str, Any], raw: RawHit) -> None:
         assert {"state": {"level": raw.level, "ts": raw.ts}} == step["expect"]
@@ -507,6 +539,12 @@ def run_recipe(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> Non
         try:
             if op == "check_all":
                 got["result"] = _combined(check_all(h.entries(step)))
+            elif op in ("peek_all", "reserve_all"):
+                opener = peek_all if op == "peek_all" else reserve_all
+                got["result"] = h.opened(step, opener(h.entries(step)))
+            elif op in ("commit", "cancel"):
+                pending = h.handles[step["handle"]]
+                got["result"] = h.settled(step, getattr(pending, op)())
             elif op == "attempt":
                 attempt = h.lockouts[step["lockout"]].attempt(step["ids"][0], verify)
                 got["result"] = _attempt_result(attempt, bool(ran))
@@ -518,7 +556,7 @@ def run_recipe(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> Non
                 got["result"] = h.limiters[step["limiter"]].reset(step["id"])
             else:
                 raise AssertionError(f"unknown op {op}")
-        except (ValueError, TypeError, VerifyRaised) as error:
+        except (ValueError, TypeError, VerifyRaised, SettledError) as error:
             got["error"] = _error_kind(error)
         h.compare(step, got, index)
 
@@ -546,6 +584,12 @@ async def run_recipe_async(vector: dict[str, Any], store: Any, salt_suffix: str 
         try:
             if op == "check_all":
                 got["result"] = _combined(await check_all_async(h.entries(step)))
+            elif op in ("peek_all", "reserve_all"):
+                opener = peek_all_async if op == "peek_all" else reserve_all_async
+                got["result"] = h.opened(step, await opener(h.entries(step)))
+            elif op in ("commit", "cancel"):
+                pending = h.handles[step["handle"]]
+                got["result"] = h.settled(step, await getattr(pending, op)())
             elif op == "attempt":
                 attempt = await h.lockouts[step["lockout"]].attempt(step["ids"][0], verify)
                 got["result"] = _attempt_result(attempt, bool(ran))
@@ -557,6 +601,6 @@ async def run_recipe_async(vector: dict[str, Any], store: Any, salt_suffix: str 
                 got["result"] = await h.limiters[step["limiter"]].reset(step["id"])
             else:
                 raise AssertionError(f"unknown op {op}")
-        except (ValueError, TypeError, VerifyRaised) as error:
+        except (ValueError, TypeError, VerifyRaised, SettledError) as error:
             got["error"] = _error_kind(error)
         h.compare(step, got, index)

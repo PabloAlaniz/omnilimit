@@ -10,6 +10,7 @@ Usage: gen_vectors.py [--check]   (--check fails if the committed vectors differ
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import ipaddress
 import json
@@ -754,7 +755,7 @@ class RecipeError(Exception):
 class RecipeModel:
     """The recipes over Meters, one per limiter and id, with a log of every store call."""
 
-    OPS = ("check_all", "attempt", "check", "peek", "reset", "inspect", "fault", "heal")
+    OPS = ("check_all", "peek_all", "reserve_all", "commit", "cancel", "attempt", "check", "peek", "reset", "inspect", "fault", "heal")
 
     def __init__(self, limiters: dict, lockouts: dict | None = None) -> None:
         scopes = [cfg["scope"] for cfg in limiters.values()]
@@ -764,12 +765,14 @@ class RecipeModel:
         self.faults: dict[str, tuple[str, set[str]]] = {}
         self.now = BASE
         self.calls: list[dict] = []
+        # Pending checks by handle name: what each holds and how it settled.
+        self.handles: dict[str, dict] = {}
 
     def meter(self, name: str, who: str) -> Meter:
         p = self.limiters[name]["policy"]
         return self.meters.setdefault((name, who), Meter(p["limit"], p["window_ms"], p["burst"]))
 
-    def store(self, op: str, name: str, who: str, cost: int = 1) -> dict | None:
+    def store(self, op: str, name: str, who: str, cost: int = 1, since: int | None = None) -> dict | None:
         """One store call: its result, or None when the armed fault answers it."""
         fault = self.faults.get(name)
         failed = fault is not None and op in fault[1]
@@ -780,6 +783,9 @@ class RecipeModel:
         if op == "reset":
             m.reset()
             return {}
+        if op == "refund":
+            assert since is not None
+            return m.refund(self.now, since, cost)
         return m.hit(self.now, cost) if op == "hit" else m.peek(self.now, cost)
 
     def decide(self, op: str, name: str, who: str, cost: int = 1) -> dict:
@@ -788,19 +794,37 @@ class RecipeModel:
             return dict(OPEN_FAILURE if self.limiters[name]["on_store_error"] == "open" else CLOSED_FAILURE)
         return short(r)
 
-    def validate(self, entries: list[dict], peeks: bool) -> None:
+    def validate(self, entries: list[dict], peeks: bool, reserves: bool = False) -> None:
         if not entries:
             raise RecipeError("value")
         approximate = [e for e in entries if self.limiters[e["limiter"]].get("tier") == "approximate"]
         burst = lambda e: self.limiters[e["limiter"]]["policy"]["burst"]  # noqa: E731
         bad_cost = [e for e in entries if not (isinstance(e.get("cost", 1), int) and 1 <= e.get("cost", 1) <= burst(e))]
         assert not (approximate and bad_cost), "which error wins is unspecified: keep vectors to one"
-        if peeks and approximate:
+        # An approximate store can neither peek nor refund: the only stores of the vectors that cannot.
+        if (peeks or reserves) and approximate:
             raise RecipeError("type")
         if bad_cost:
             raise RecipeError("value")
 
     def check_all(self, entries: list[dict]) -> dict:
+        # Self-check: the same step as a pending opened in peek mode and committed at once.
+        twin = copy.deepcopy(self)
+        try:
+            twin.open_pending("peek", "\0check_all", entries)
+            twin_result: dict | str = twin.settle("commit", "\0check_all")
+        except RecipeError as error:
+            twin_result = error.kind
+        try:
+            result = self.checked_all(entries)
+        except RecipeError as error:
+            assert twin_result == error.kind and twin.calls == self.calls == []
+            raise
+        assert twin_result == result and twin.calls == self.calls
+        assert {k: (m.level, m.ts) for k, m in twin.meters.items()} == {k: (m.level, m.ts) for k, m in self.meters.items()}
+        return result
+
+    def checked_all(self, entries: list[dict]) -> dict:
         self.validate(entries, peeks=True)
         cost = lambda e: e.get("cost", 1)  # noqa: E731
         peeks = [self.decide("peek", e["limiter"], e["id"], cost(e)) for e in entries]
@@ -826,6 +850,88 @@ class RecipeModel:
             assert result["decisions"] is peeks or sum(not d["allowed"] for d in result["decisions"]) == 1
         elif any(d["remaining"] is not None for d in result["decisions"]):
             assert g["remaining"] == min(d["remaining"] for d in result["decisions"] if d["remaining"] is not None)
+        return result
+
+    def give_back(self, held: dict | None) -> bool | None:
+        """Refund one reservation: None when there is none, else whether the store applied it."""
+        if held is None:
+            return None
+        return self.store("refund", held["limiter"], held["id"], held["cost"], held["since"]) is not None
+
+    def open_pending(self, mode: str, handle: str, entries: list[dict]) -> dict:
+        """`peek_all` or `reserve_all`: the first phase of a combined check."""
+        assert handle not in self.handles, "a handle names one pending"
+        self.validate(entries, peeks=mode == "peek", reserves=mode == "reserve")
+        cost = lambda e: e.get("cost", 1)  # noqa: E731
+        held: list[dict | None] = []
+        if mode == "peek":
+            decisions = [self.decide("peek", e["limiter"], e["id"], cost(e)) for e in entries]
+            held = [None] * len(decisions)
+            refunded: list[bool | None] = [None] * len(decisions)
+            index = governing(decisions)
+        else:
+            before = copy.deepcopy(self.meters)
+            decisions = []
+            for e in entries:
+                r = self.store("hit", e["limiter"], e["id"], cost(e))
+                if r is None:
+                    on = self.limiters[e["limiter"]]["on_store_error"]
+                    decisions.append(dict(OPEN_FAILURE if on == "open" else CLOSED_FAILURE))
+                    held.append(None)
+                else:
+                    decisions.append(short(r))
+                    held.append({"limiter": e["limiter"], "id": e["id"], "cost": cost(e), "since": r["state"]["ts"]} if r["allowed"] else None)
+                if not decisions[-1]["allowed"]:
+                    break
+            if decisions[-1]["allowed"]:
+                refunded = [None] * len(decisions)
+                index = governing(decisions)
+            else:
+                # Compensate in entry order; the denial itself held nothing.
+                refunded = [self.give_back(h) for h in held]
+                index = len(decisions) - 1
+                assert index == governing(decisions)
+                # Self-check: compensation leaves every bucket where the request had never come,
+                # or above it where a refund failed. Never below: that would over-admit.
+                for k, m in self.meters.items():
+                    was = before.get(k)
+                    level, then = m.level_at(self.now), (was.level_at(self.now) if was else 0)
+                    failed = any(done is False for h, done in zip(held, refunded) if h and (h["limiter"], h["id"]) == k)
+                    assert level >= then and (failed or level == then)
+        allowed = decisions[index]["allowed"]
+        assert allowed == all(d["allowed"] for d in decisions)
+        self.handles[handle] = {
+            "mode": mode, "entries": entries, "allowed": allowed, "governing": index,
+            "decisions": decisions, "held": held, "refunded": refunded, "settled": None, "result": None,
+        }
+        return {"allowed": allowed, "governing": index, "decisions": decisions, "refunded": refunded}
+
+    def settle(self, op: str, handle: str) -> dict:
+        """`commit` or `cancel`, under rule 8: once, repeatable, and the other one refused."""
+        h = self.handles[handle]
+        if h["settled"] is not None:
+            assert self.calls == []
+            if h["settled"] != op:
+                raise RecipeError("state")
+            return h["result"]
+        h["settled"] = op
+        own = {"allowed": h["allowed"], "governing": h["governing"], "decisions": h["decisions"]}
+        if op == "commit":
+            if h["mode"] == "peek" and h["allowed"]:
+                counted: list[dict] = []
+                for e in h["entries"]:
+                    counted.append(self.decide("hit", e["limiter"], e["id"], e.get("cost", 1)))
+                    if not counted[-1]["allowed"]:
+                        break
+                denied = not counted[-1]["allowed"]
+                result = {"allowed": not denied, "governing": len(counted) - 1 if denied else governing(counted), "decisions": counted}
+            else:
+                result = own
+        elif h["mode"] == "reserve" and h["allowed"]:
+            result = {"refunded": [self.give_back(held) for held in h["held"]]}
+        else:
+            result = {"refunded": h["refunded"]}
+        h["result"] = result
         return result
 
     def attempt(self, lockout: str, ids: list[str], verify: object) -> dict:
@@ -864,6 +970,10 @@ class RecipeModel:
         try:
             if op == "check_all":
                 expect["result"] = self.check_all(step["entries"])
+            elif op in ("peek_all", "reserve_all"):
+                expect["result"] = self.open_pending(op[: -len("_all")], step["handle"], step["entries"])
+            elif op in ("commit", "cancel"):
+                expect["result"] = self.settle(op, step["handle"])
             elif op == "attempt":
                 expect["result"] = self.attempt(step["lockout"], step["ids"], step["verify"])
             elif op == "reset":
@@ -923,6 +1033,19 @@ def recipes() -> dict[str, dict]:
 
     def fault(name: str, kind: str, on: list[str]) -> dict:
         return {"op": "fault", "limiter": name, "fault": kind, "on": on}
+
+    def pending(op: str, handle: str, *entries: tuple, at: int | None = None) -> dict:
+        step = ca(*entries, at=at)
+        return {"op": op, **({"at_ms": at} if at is not None else {}), "handle": handle, "entries": step["entries"]}
+
+    def pa(handle: str, *entries: tuple, at: int | None = None) -> dict:
+        return pending("peek_all", handle, *entries, at=at)
+
+    def ra(handle: str, *entries: tuple, at: int | None = None) -> dict:
+        return pending("reserve_all", handle, *entries, at=at)
+
+    def settle(op: str, handle: str, at: int | None = None) -> dict:
+        return {"op": op, **({"at_ms": at} if at is not None else {}), "handle": handle}
 
     def heal(name: str) -> dict:
         return {"op": "heal", "limiter": name}
@@ -1059,6 +1182,133 @@ def recipes() -> dict[str, dict]:
             {"edge-login": [{"limiter": "edge"}]},
         ),
     }
+    named.update({
+        "pending-peek-commit-counts-every-limit": (
+            {"ip": lim("ip", 10, 60_000), "user": lim("user", 3, 60_000)},
+            [pa("p", ("ip", "a"), ("user", "u"), at=b), one("inspect", "user", "u"), settle("commit", "p"), one("inspect", "ip", "a"), one("inspect", "user", "u")],
+        ),
+        # Another request takes the last unit between the peek and the commit.
+        "pending-commit-denied-after-a-racing-check": (
+            {"ip": lim("ip", 1, 60_000), "user": lim("user", 5, 60_000)},
+            [
+                pa("p", ("user", "u"), ("ip", "a"), at=b),
+                one("check", "ip", "a"),
+                settle("commit", "p"),
+                one("inspect", "user", "u"), one("inspect", "ip", "a"),
+            ],
+        ),
+        "pending-commit-twice-returns-the-first-result": (
+            {"ip": lim("ip", 2, 60_000)},
+            [pa("p", ("ip", "a"), at=b), settle("commit", "p"), settle("commit", "p", at=b + 30_000), one("inspect", "ip", "a")],
+        ),
+        "pending-other-settlement-is-a-state-error": (
+            {"ip": lim("ip", 2, 60_000), "user": lim("user", 2, 60_000)},
+            [
+                pa("p", ("ip", "a"), at=b), settle("cancel", "p"), settle("commit", "p"), settle("cancel", "p"), one("inspect", "ip", "a"),
+                ra("r", ("ip", "a"), ("user", "u")), settle("commit", "r"), settle("cancel", "r"), settle("commit", "r"),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"),
+            ],
+        ),
+        "pending-peek-denied-settles-without-calls": (
+            {"ip": lim("ip", 1, 60_000), "user": lim("user", 5, 60_000)},
+            [
+                one("check", "ip", "a", at=b),
+                pa("p", ("user", "u"), ("ip", "a")), settle("commit", "p"), settle("cancel", "p"),
+                pa("q", ("ip", "a"), ("user", "u")), settle("cancel", "q"), settle("cancel", "q"),
+                one("inspect", "user", "u"),
+            ],
+        ),
+        "reserve-all-allowed-commit-makes-no-call": (
+            {"ip": lim("ip", 10, 60_000), "user": lim("user", 3, 60_000)},
+            [ra("r", ("ip", "a"), ("user", "u", 2), at=b), settle("commit", "r"), one("inspect", "ip", "a"), one("inspect", "user", "u")],
+        ),
+        "reserve-all-denied-on-the-second-entry-refunds-the-first": (
+            {"ip": lim("ip", 5, 60_000), "user": lim("user", 1, 60_000)},
+            [
+                one("check", "user", "u", at=b),
+                ra("r", ("ip", "a"), ("user", "u"), ("ip", "c"), at=b + 1000),
+                one("inspect", "ip", "a"), one("inspect", "ip", "c"),
+                settle("commit", "r"), settle("commit", "r"),
+                ra("s", ("ip", "a"), ("user", "u")), settle("cancel", "s"),
+                one("inspect", "ip", "a"),
+            ],
+        ),
+        "reserve-all-cancel-refunds-every-entry": (
+            {"ip": lim("ip", 2, 1000), "user": lim("user", 5, 60_000)},
+            [
+                one("check", "ip", "a", at=b),
+                ra("r", ("ip", "a"), ("user", "u", 2), at=b + 100),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"),
+                settle("cancel", "r", at=b + 300),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"),
+                settle("cancel", "r"),
+                ra("s", ("ip", "a"), ("user", "u")), settle("cancel", "s", at=b + 5000),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"),
+            ],
+        ),
+        "reserve-all-needs-limiters-that-refund": (
+            {"ip": lim("ip", 5, 60_000), "edge": lim("edge", 5, 60_000, on="open", tier="approximate")},
+            [ra("r", ("ip", "a"), ("edge", "a"), at=b), ra("s", ("edge", "a")), one("inspect", "ip", "a")],
+        ),
+        "reserve-all-validates-costs-before-any-store-call": (
+            {"ip": lim("ip", 10, 60_000, 4), "user": lim("user", 5, 60_000)},
+            [ra("r", ("ip", "a"), ("user", "u", 6), at=b), ra("s", ("ip", "a", 5)), ra("t", at=b), one("inspect", "ip", "a")],
+        ),
+        "reserve-all-failed-compensation-stays-counted": (
+            {"ip": lim("ip", 5, 60_000), "acct": lim("acct", 5, 60_000), "user": lim("user", 1, 60_000)},
+            [
+                one("check", "user", "u", at=b),
+                fault("ip", "error", ["refund"]),
+                ra("r", ("ip", "a"), ("acct", "x"), ("user", "u")),
+                one("inspect", "ip", "a"), one("inspect", "acct", "x"),
+                ra("s", ("acct", "x"), ("ip", "a")),
+                settle("cancel", "s"),
+                one("inspect", "ip", "a"), one("inspect", "acct", "x"),
+                heal("ip"),
+                settle("cancel", "s"),
+            ],
+        ),
+        "reserve-all-refund-timeout-stays-counted": (
+            {"ip": lim("ip", 5, 60_000), "user": lim("user", 1, 60_000)},
+            [
+                one("check", "user", "u", at=b),
+                fault("ip", "timeout", ["refund"]),
+                ra("r", ("ip", "a"), ("user", "u")),
+                heal("ip"),
+                one("inspect", "ip", "a"),
+            ],
+        ),
+        "reserve-all-same-entry-twice": (
+            {"ip": lim("ip", 3, 60_000)},
+            [
+                ra("r", ("ip", "a"), ("ip", "a"), at=b), one("inspect", "ip", "a"),
+                ra("s", ("ip", "a"), ("ip", "a")), one("inspect", "ip", "a"),
+                settle("cancel", "r"), one("inspect", "ip", "a"),
+            ],
+        ),
+        "reserve-all-store-failures": (
+            {"open": lim("open", 2, 60_000, on="open"), "closed": lim("closed", 2, 60_000), "ip": lim("ip", 1, 60_000)},
+            [
+                fault("open", "error", ["hit"]),
+                ra("r", ("open", "x"), ("ip", "a"), at=b),
+                settle("cancel", "r"),
+                one("check", "ip", "a"),
+                ra("s", ("open", "x"), ("ip", "a")),
+                heal("open"),
+                fault("closed", "error", ["hit"]),
+                ra("t", ("open", "x"), ("closed", "x"), at=b + 60_000),
+                one("inspect", "open", "x"),
+            ],
+        ),
+        "check-all-is-peek-all-then-commit": (
+            {"ip": lim("ip", 2, 60_000), "user": lim("user", 3, 60_000)},
+            [
+                ca(("ip", "a"), ("user", "u"), at=b), pa("p", ("ip", "a"), ("user", "u")), settle("commit", "p"),
+                ca(("ip", "a"), ("user", "u")), pa("q", ("ip", "a"), ("user", "u")), settle("commit", "q"),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"),
+            ],
+        ),
+    })
     out = {f"recipe/{k}": recipe(f"recipe/{k}", *v) for k, v in named.items()}
 
     rng = random.Random(20261120)
@@ -1102,6 +1352,58 @@ def recipes() -> dict[str, dict]:
             else:
                 timeline.append(one(kind, rng.choice(names), rng.choice("xxy"), at=when))
         out[f"recipe/random-{n:03d}"] = recipe(f"recipe/random-{n:03d}", limiters, timeline, lockouts)
+
+    # Pending checks in both modes, settled, repeated, crossed and abandoned, among plain calls.
+    rng = random.Random(20261121)
+    for n in range(24):
+        limiters = {}
+        for name in ("a", "b", "c")[: rng.randrange(1, 4)]:
+            limit = rng.choice([1, 2, 3, 5, 10])
+            window = rng.choice([1000, 1009, 10_000, 60_000])
+            burst = rng.choice([1, 2, 3, limit, limit + 1])
+            limiters[name] = lim(name, limit, window, burst, on=rng.choice(["open", "closed"]))
+        names = list(limiters)
+        at = BASE + rng.randrange(1000)
+        timeline = []
+        faulted = set()
+        handles: list[str] = []
+        for i in range(rng.randrange(12, 30)):
+            dt = rng.choice([0, 0, 0, 1, 17, 333, 1000, 5000])
+            at += dt
+            when = at if (i == 0 or dt) else None
+            kind = rng.choice(["peek_all", "reserve_all", "reserve_all", "settle", "settle", "settle", "check_all", "check", "reset", "inspect", "fault"])
+            if kind == "settle" and not handles:
+                kind = "reserve_all"
+            if kind == "fault":
+                if faulted and rng.random() < 0.5:
+                    name = rng.choice(sorted(faulted))
+                    faulted.discard(name)
+                    timeline.append(heal(name))
+                else:
+                    name = rng.choice(names)
+                    faulted.add(name)
+                    timeline.append(fault(name, "error", rng.sample(["peek", "hit", "reset", "refund"], rng.randrange(1, 5))))
+                continue
+            if kind in ("peek_all", "reserve_all", "check_all"):
+                entries = []
+                for _ in range(rng.randrange(1, 4)):
+                    name = rng.choice(names)
+                    burst = limiters[name]["policy"]["burst"]
+                    cost = min(burst, rng.choice([1, 1, 1, 2, burst]))
+                    entries.append((name, rng.choice("xxy"), *([cost] if cost != 1 else [])))
+                if kind == "check_all":
+                    timeline.append(ca(*entries, at=when))
+                else:
+                    handle = f"h{len(handles)}"
+                    handles.append(handle)
+                    timeline.append(pending(kind, handle, *entries, at=when))
+            elif kind == "settle":
+                # Mostly the newest pending, sometimes an older one, settled or not.
+                handle = handles[-1] if rng.random() < 0.6 else rng.choice(handles)
+                timeline.append(settle(rng.choice(["commit", "cancel"]), handle, at=when))
+            else:
+                timeline.append(one(kind, rng.choice(names), rng.choice("xxy"), at=when))
+        out[f"recipe/pending-random-{n:03d}"] = recipe(f"recipe/pending-random-{n:03d}", limiters, timeline)
     return out
 
 

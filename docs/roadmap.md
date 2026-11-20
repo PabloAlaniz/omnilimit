@@ -16,7 +16,7 @@ Items that came up while the library was being adopted in applications, in rough
 
 | Item | Why | Shape it would take |
 |---|---|---|
-| Atomic composite limits | `checkAll` peeks and then counts, so a race can still spend one limit when another denies | One store call over several keys, where the store can do it atomically |
+| Atomic composite limits | `checkAll` peeks and then counts, so a race can still spend one limit when another denies; `reserveAll` never over-admits but holds earlier limits for a round trip | One store call over several keys, where the store can do it atomically |
 | REST-based Redis | Serverless platforms without TCP cannot use the Redis store | A `RedisEval` adapter for an HTTP Redis client, tested against a real service |
 | Serverless HTTP Postgres drivers in the matrix | `fromRowQuery` adapts them, but only `pg` is tested | One such driver in the store suite |
 | Flask and Django adapters | Python has FastAPI and plain ASGI only | A decorator for Flask, a middleware and a decorator for Django, on the blocking `Limiter` |
