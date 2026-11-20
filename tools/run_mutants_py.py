@@ -47,8 +47,8 @@ CORE = [
     (
         "check_all counts before looking",
         "_recipes.py",
-        "_refusal([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
-        "_refusal([entry[0].check(entry[1], cost=_cost(entry)) for entry in entries])",
+        "own = _peeked([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
+        "own = _peeked([entry[0].check(entry[1], cost=_cost(entry)) for entry in entries])",
     ),
     (
         "lockout counts successes",
@@ -59,13 +59,13 @@ CORE = [
     (
         "check_all stops peeking at the first denial",
         "_recipes.py",
-        "refusal = _refusal([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
+        "own = _peeked([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
         "peeks = []\n"
         "    for entry in entries:\n"
         "        peeks.append(entry[0].peek(entry[1], cost=_cost(entry)))\n"
         "        if not peeks[-1].allowed:\n"
         "            break\n"
-        "    refusal = _refusal(peeks)",
+        "    own = _peeked(peeks)",
     ),
     (
         "check_all denial tie picks the last",
@@ -88,15 +88,11 @@ CORE = [
     (
         "check_all keeps counting after a denial",
         "_recipes.py",
-        "        decision = entry[0].check(entry[1], cost=_cost(entry))\n"
-        "        decisions.append(decision)\n"
-        "        if not decision.allowed:\n"
-        "            return CombinedDecision(allowed=False, decision=decision, decisions=tuple(decisions))",
-        "        decision = entry[0].check(entry[1], cost=_cost(entry))\n"
-        "        decisions.append(decision)\n"
-        "    for decision in decisions:\n"
-        "        if not decision.allowed:\n"
-        "            return CombinedDecision(allowed=False, decision=decision, decisions=tuple(decisions))",
+        "        decisions.append(entry[0].check(entry[1], cost=_cost(entry)))\n"
+        "        if not decisions[-1].allowed:\n"
+        "            break\n",
+        "        decisions.append(entry[0].check(entry[1], cost=_cost(entry)))\n"
+        "    decisions = [d for d in decisions if d.allowed] + [d for d in decisions if not d.allowed][:1]\n",
     ),
     (
         "recipes validate costs lazily",
@@ -109,6 +105,84 @@ CORE = [
         "_recipes.py",
         'if limiter.tier == "approximate":',
         'if limiter.tier == "approximate" and False:',
+    ),
+    (
+        "commit counts a denied pending",
+        "_recipes.py",
+        "lambda: _count_all(entries) if own.allowed else own,",
+        "lambda: _count_all(entries),",
+    ),
+    (
+        "async commit counts a denied pending",
+        "_recipes.py",
+        "return await _count_all_async(entries) if own.allowed else own",
+        "return await _count_all_async(entries)",
+    ),
+    (
+        "a repeated settlement runs again",
+        "_recipes.py",
+        "        if self._by is None:\n            self._by = op\n            return True\n",
+        "        if self._by is None or self._by == op:\n            self._by = op\n            return True\n",
+    ),
+    (
+        "settlement removed",
+        "_recipes.py",
+        "        if self._by is None:\n            self._by = op\n            return True\n",
+        "        if True:\n            self._by = op\n            return True\n",
+    ),
+    (
+        "sync settlement is not locked",
+        "_recipes.py",
+        "        with self._lock:\n            if self._claim(op):",
+        "        if True:\n            if self._claim(op):",
+    ),
+    (
+        "async settlements do not share one task",
+        "_recipes.py",
+        "        if self._claim(op):\n            self._task = asyncio.ensure_future(work())\n",
+        "        self._claim(op)\n        self._task = asyncio.ensure_future(work())\n",
+    ),
+    (
+        "reserve cancel does not refund",
+        "_recipes.py",
+        "        lambda: Cancelled(tuple(_refund_each(entries, held))),",
+        "        lambda: Cancelled(tuple(None for _ in held)),",
+    ),
+    (
+        "async reserve cancel does not refund",
+        "_recipes.py",
+        "        return Cancelled(tuple(await _refund_each_async(entries, held)))",
+        "        return Cancelled(tuple(None for _ in held))",
+    ),
+    (
+        "reserve_all does not compensate a denial",
+        "_recipes.py",
+        "        refunded = _refund_each(entries, held)\n",
+        "        refunded = [None for _ in held]\n",
+    ),
+    (
+        "async reserve_all does not compensate a denial",
+        "_recipes.py",
+        "        refunded = await _refund_each_async(entries, held)\n",
+        "        refunded = [None for _ in held]\n",
+    ),
+    (
+        "compensation reports the denial as a failed refund",
+        "_recipes.py",
+        "        None if reservation is None else entry[0].refund(reservation)\n",
+        "        False if reservation is None else entry[0].refund(reservation)\n",
+    ),
+    (
+        "reserve_all validates lazily",
+        "_recipes.py",
+        '    _validate("reserve_all", entries, "reserve")\n    decisions: list[Decision] = []\n    held: list[Reservation | None] = []\n    for entry in entries:\n        reserved = entry[0].reserve(',
+        '    decisions: list[Decision] = []\n    held: list[Reservation | None] = []\n    for entry in entries:\n        reserved = entry[0].reserve(',
+    ),
+    (
+        "reserve_all trusts a store without refund",
+        "_recipes.py",
+        '        if mode == "reserve":\n            _store_method(limiter._store, "refund")\n',
+        "",
     ),
     (
         "lockout counts a failure when verify raises",

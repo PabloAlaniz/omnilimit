@@ -3,11 +3,16 @@ export { parsePolicy } from './core/gcra.js';
 export {
   checkAll,
   createLockout,
+  peekAll,
+  reserveAll,
+  SettledError,
   type Attempt,
+  type Cancelled,
   type CombinedDecision,
   type LimitEntry,
   type Lockout,
   type LockoutOptions,
+  type Pending,
 } from './core/recipes.js';
 export { memoryStore, type MemoryStoreOptions } from './stores/memory.js';
 export { SPEC_VERSION } from './generated/assets.js';

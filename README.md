@@ -110,7 +110,7 @@ const { allowed, decision } = await checkAll([
 if (!allowed) return new Response(null, { status: decision.status ?? 429, headers: decision.headers });
 ```
 
-`decision` is the one to answer with: the longest wait when denied, the fewest units left when allowed. Both recipes are built on `peek`, which is advisory, so they need an `exact` or `local` store and are not atomic: see [recipes](docs/recipes.md).
+`decision` is the one to answer with: the longest wait when denied, the fewest units left when allowed. Both recipes are built on `peek`, which is advisory, so they need an `exact` or `local` store and are not atomic. `reserveAll` counts first and refunds instead, so it never lets more through, and both split into two phases around work that may not happen: see [recipes](docs/recipes.md).
 
 ### Requests that weigh more than one
 

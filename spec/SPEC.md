@@ -163,12 +163,14 @@ reserve with a type error, as it does on an `approximate` store.
 
 ## Recipes
 
-Two compositions of check, peek and reset are common enough to have a fixed meaning. They add
-no state and no store operation. `recipe` vectors apply to ports that provide the recipes.
+A few compositions of check, peek, reset, reserve and refund are common enough to have a fixed
+meaning. They add no state and no store operation. `recipe` vectors apply to ports that provide
+the recipes.
 
 ### Common rules
 
-1. A recipe only calls `peek`, `check` and `reset` of the limiters it is given.
+1. A recipe only calls `peek`, `check`, `reset`, `reserve` and `refund` of the limiters it is
+   given. A reserve is a check that keeps its reservation, so the store sees a hit.
 2. An entry is a limiter, an id and a cost (default 1). Entries are independent: the same
    limiter and id may appear twice, and each one is peeked and counted on its own. An empty
    list is a value error, raised before any store call.
@@ -181,26 +183,64 @@ no state and no store operation. `recipe` vectors apply to ports that provide th
 5. Each limit follows its own `onStoreError`. An `open` failure is allowed, with reason
    `store_error` and `remaining` `null`, so by rule 3 it never governs over a number. A
    `closed` failure is a denial with `retry_after_ms` 1000 that competes under rule 3 with no
-   priority. A failed reset is reported as `false`, follows neither mode, and does not stop the
-   resets after it.
+   priority. A failed reset or refund is reported as `false`, follows neither mode, and does
+   not stop the resets or refunds after it.
 6. Every entry's cost is validated against its limiter before the recipe's first store call.
 7. A recipe that peeks raises a type error before any store call if any of its limiters is of
-   tier `approximate`.
+   tier `approximate`. A recipe that reserves raises a type error before any store call if any
+   of its limiters cannot refund: every `approximate` one, and one whose store predates refund.
+8. Settlement. A pending check (below) settles once, by its first `commit` or `cancel`. It is
+   settled before that operation's first store call, so concurrent calls of the same operation
+   share its one result. Calling the same operation again returns that result without a store
+   call. Calling the other one raises a state error without a store call. This holds for every
+   pending, allowed or denied, in either mode.
 
 When several entries break rules 2, 6 or 7, which error is raised is not specified.
 
 ### Combined check
 
-`checkAll` applies an ordered list of entries to one request:
+A combined check applies an ordered list of entries to one request in two phases. It opens a
+pending check, the caller does the work, and then commits or cancels it. A pending reports
+`allowed`, the governing `decision`, the `decisions` and `refunded`, which holds one value per
+decision: `true` when that entry's reservation was given back, `false` when its refund failed and
+it stays counted, and `null` when there was nothing to give back.
 
-1. Peek every entry, in order, without stopping at a denial. If any peek is denied, nothing is
-   counted: the result is denied, its decisions are all the peeks, and the governing decision
-   follows rule 3.
-2. Otherwise check every entry, in order, and stop at the first denial. The entries after it
-   are not counted, the ones before it stay counted, the decisions end with that denial, and
-   it governs.
-3. If no check is denied, the result is allowed, its decisions are all the checks, and the
-   governing decision follows rule 3.
+**Peek mode** (`peekAll`) is advisory:
+
+1. Peek every entry, in order, without stopping at a denial. Nothing is counted. The pending's
+   decisions are all the peeks, the governing decision follows rule 3, and `refunded` is all
+   `null`.
+2. `commit` on an allowed pending checks every entry, in order, and stops at the first denial.
+   The entries after it are not counted, the ones before it stay counted, the decisions end with
+   that denial, and it governs. If no check is denied, the result is allowed, its decisions are
+   all the checks, and the governing decision follows rule 3. On a denied pending, `commit` makes
+   no store call and returns the pending's own result.
+3. `cancel` makes no store call, and its `refunded` is all `null`.
+
+**Reserve mode** (`reserveAll`) counts first and gives back what it should not have counted:
+
+1. Reserve every entry, in order, and stop at the first denial.
+2. If one is denied, refund the reservations taken before it, in entry order. The pending is
+   denied, its decisions end with that denial, and it governs. `refunded` reports each refund,
+   and is `null` for the denial and for an entry allowed by `open` after a store failure, which
+   counted nothing.
+3. Otherwise the pending is allowed, its decisions are all the reservations, the governing
+   decision follows rule 3, and `refunded` is all `null`.
+4. `commit` makes no store call and returns the pending's own result: the work happened, so the
+   reservations stay counted.
+5. `cancel` on an allowed pending refunds every reservation, in entry order, and reports each one
+   in `refunded`. On a denied pending it makes no store call and returns the pending's
+   `refunded`.
+
+Refunds go in entry order like every other operation (rule 4), so the reservation held longest is
+given back first. A pending that is never settled keeps what it holds: nothing in peek mode, and
+in reserve mode its reservations stay counted, which is the strict side.
+
+`commit` answers with a combined result: `allowed`, the governing `decision` and the `decisions`.
+`cancel` answers with `refunded`.
+
+`checkAll` is `peekAll` followed at once by `commit`: it makes the same store calls and gives the
+same result.
 
 ### Lockout
 
@@ -218,8 +258,17 @@ A lockout counts only failed attempts against one limiter, for an id and a verif
 
 ### What recipes do not promise
 
-- Atomicity. A peek is advisory, so under concurrency `checkAll` can pass every peek, count
-  some entries and then be denied by a later one. The entries already counted stay counted.
+- Atomicity in peek mode. A peek is advisory, so under concurrency `commit` (and `checkAll`) can
+  pass every peek, count some entries and then be denied by a later one. The entries already
+  counted stay counted.
+- Atomicity in reserve mode. Reserve mode is compensated, not atomic: when a later entry denies,
+  the earlier ones are counted until their refunds land, about one round trip each. Requests in
+  that gap can be denied by them, but none is admitted that a sequence of checks of the admitted
+  requests alone would deny, so the error only goes towards denying. A refund that fails leaves
+  its entry counted, on the same side.
+- Refunds across your own reset. A reservation refunded after you reset its bucket can take back
+  units counted after the reset, as described under Refund. Do not reset what a pending in
+  reserve mode still holds.
 - A bound on verifications. Attempts that overlap can all pass the peek before any of them is
   counted, so a lockout can run the verification more than `burst` times. Each unit freed lets
   through about the attacker's rate times the time between peek and check.
@@ -229,12 +278,15 @@ A lockout counts only failed attempts against one limiter, for an id and a verif
 A `recipe` vector names its limiters and runs a `timeline` against them. A step's `at_ms` is
 passed to every store call as `now`, and holds for the steps after it until another one sets
 it. `fault` makes a limiter's store fail (`error`) or hang (`timeout`) on the listed operations
-until `heal`. `expect.calls` is every store call the step made, in order, as `peek`, `hit` or
-`reset` with the limiter and the id, marked `failed` when the fault answered. `inspect` reads a
-bucket's raw state without counting as a call. A combined result gives `allowed`, the index of
-the `governing` decision and the `decisions`; an attempt's adds `verified` and `verify_ran`,
-with its one decision as `decisions[0]`. `error` names the kind raised: `value`, `type`, or
-`verify` for the verification's own error.
+until `heal`. `expect.calls` is every store call the step made, in order, as `peek`, `hit`,
+`reset` or `refund` with the limiter and the id, marked `failed` when the fault answered.
+`inspect` reads a bucket's raw state without counting as a call. A combined result gives
+`allowed`, the index of the `governing` decision and the `decisions`; a pending adds `refunded`,
+and an attempt's adds `verified` and `verify_ran`, with its one decision as `decisions[0]`.
+`peek_all` and `reserve_all` open a pending under the name in `handle`, and `commit` and `cancel`
+settle the pending of that name; a cancel's result is `{refunded}`. `error` names the kind
+raised: `value`, `type`, `state` for a settlement rule 8 refuses, or `verify` for the
+verification's own error.
 
 ## State format 1
 
@@ -332,6 +384,6 @@ The effective window is the retry time when denied, the time until the next unit
 | `failure` | Each fault with each failure mode, and a refund that fails |
 | `concurrency` | 200 simultaneous hits allow exactly `burst` |
 | `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
-| `recipe` | Combined checks and lockouts: store calls in order, decisions, the governing one, and errors |
+| `recipe` | Combined checks, pending checks and lockouts: store calls in order, decisions, the governing one, refunds, and errors |
 
 Changing the meaning of a vector requires a new spec version.

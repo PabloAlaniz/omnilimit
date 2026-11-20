@@ -1,0 +1,88 @@
+{
+ "spec": "1",
+ "id": "recipe/reserve-all-validates-costs-before-any-store-call",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 10,
+    "window_ms": 60000,
+    "burst": 4
+   },
+   "on_store_error": "closed"
+  },
+  "user": {
+   "scope": "user",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "reserve_all",
+   "at_ms": 1700000000000,
+   "handle": "r",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "user",
+     "id": "u",
+     "cost": 6
+    }
+   ],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "reserve_all",
+   "handle": "s",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a",
+     "cost": 5
+    }
+   ],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "reserve_all",
+   "at_ms": 1700000000000,
+   "handle": "t",
+   "entries": [],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  }
+ ]
+}

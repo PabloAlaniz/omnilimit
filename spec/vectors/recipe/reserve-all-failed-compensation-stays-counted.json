@@ -1,0 +1,295 @@
+{
+ "spec": "1",
+ "id": "recipe/reserve-all-failed-compensation-stays-counted",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  },
+  "acct": {
+   "scope": "acct",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  },
+  "user": {
+   "scope": "user",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 1
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "check",
+   "at_ms": 1700000000000,
+   "limiter": "user",
+   "id": "u",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "fault",
+   "limiter": "ip",
+   "fault": "error",
+   "on": [
+    "refund"
+   ]
+  },
+  {
+   "op": "reserve_all",
+   "handle": "r",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "acct",
+     "id": "x"
+    },
+    {
+     "limiter": "user",
+     "id": "u"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "acct",
+      "id": "x"
+     },
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "refund",
+      "limiter": "ip",
+      "id": "a",
+      "failed": true
+     },
+     {
+      "op": "refund",
+      "limiter": "acct",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 2,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000
+      }
+     ],
+     "refunded": [
+      false,
+      true,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 60000,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "acct",
+   "id": "x",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "reserve_all",
+   "handle": "s",
+   "entries": [
+    {
+     "limiter": "acct",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "acct",
+      "id": "x"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 24000,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "handle": "s",
+   "expect": {
+    "calls": [
+     {
+      "op": "refund",
+      "limiter": "acct",
+      "id": "x"
+     },
+     {
+      "op": "refund",
+      "limiter": "ip",
+      "id": "a",
+      "failed": true
+     }
+    ],
+    "result": {
+     "refunded": [
+      true,
+      false
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 120000,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "acct",
+   "id": "x",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "heal",
+   "limiter": "ip"
+  },
+  {
+   "op": "cancel",
+   "handle": "s",
+   "expect": {
+    "calls": [],
+    "result": {
+     "refunded": [
+      true,
+      false
+     ]
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,551 @@
+{
+ "spec": "1",
+ "id": "recipe/pending-random-019",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "a": {
+   "scope": "a",
+   "policy": {
+    "limit": 3,
+    "window_ms": 1009,
+    "burst": 2
+   },
+   "on_store_error": "closed"
+  },
+  "b": {
+   "scope": "b",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 1
+   },
+   "on_store_error": "open"
+  }
+ },
+ "timeline": [
+  {
+   "op": "reserve_all",
+   "at_ms": 1700000005889,
+   "handle": "h0",
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 337,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "handle": "h0",
+   "expect": {
+    "calls": [
+     {
+      "op": "refund",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "refunded": [
+      true
+     ]
+    }
+   }
+  },
+  {
+   "op": "commit",
+   "handle": "h0",
+   "expect": {
+    "calls": [],
+    "error": "state"
+   }
+  },
+  {
+   "op": "commit",
+   "at_ms": 1700000006889,
+   "handle": "h0",
+   "expect": {
+    "calls": [],
+    "error": "state"
+   }
+  },
+  {
+   "op": "peek_all",
+   "at_ms": 1700000006906,
+   "handle": "h1",
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "b",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "b",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "peek_all",
+   "at_ms": 1700000006907,
+   "handle": "h2",
+   "entries": [
+    {
+     "limiter": "b",
+     "id": "x"
+    },
+    {
+     "limiter": "b",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59999,
+       "retry_after_ms": 59999
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59999,
+       "retry_after_ms": 59999
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "reserve_all",
+   "at_ms": 1700000006908,
+   "handle": "h3",
+   "entries": [
+    {
+     "limiter": "b",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "b",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59998,
+       "retry_after_ms": 59998
+      }
+     ],
+     "refunded": [
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "peek_all",
+   "handle": "h4",
+   "entries": [
+    {
+     "limiter": "b",
+     "id": "y"
+    },
+    {
+     "limiter": "b",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "y"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "y"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59998,
+       "retry_after_ms": 59998
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "commit",
+   "at_ms": 1700000006909,
+   "handle": "h4",
+   "expect": {
+    "calls": [],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59998,
+       "retry_after_ms": 59998
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "peek_all",
+   "handle": "h5",
+   "entries": [
+    {
+     "limiter": "b",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59997,
+       "retry_after_ms": 59997
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "at_ms": 1700000006926,
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000005889
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "handle": "h5",
+   "expect": {
+    "calls": [],
+    "result": {
+     "refunded": [
+      null,
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "peek_all",
+   "at_ms": 1700000006927,
+   "handle": "h6",
+   "entries": [
+    {
+     "limiter": "b",
+     "id": "y"
+    },
+    {
+     "limiter": "b",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "y"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59979,
+       "retry_after_ms": 59979
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "at_ms": 1700000007260,
+   "handle": "h6",
+   "expect": {
+    "calls": [],
+    "result": {
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "commit",
+   "at_ms": 1700000007261,
+   "handle": "h0",
+   "expect": {
+    "calls": [],
+    "error": "state"
+   }
+  }
+ ]
+}

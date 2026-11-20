@@ -1,0 +1,282 @@
+{
+ "spec": "1",
+ "id": "recipe/reserve-all-denied-on-the-second-entry-refunds-the-first",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  },
+  "user": {
+   "scope": "user",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 1
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "check",
+   "at_ms": 1700000000000,
+   "limiter": "user",
+   "id": "u",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "reserve_all",
+   "at_ms": 1700000001000,
+   "handle": "r",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "user",
+     "id": "u"
+    },
+    {
+     "limiter": "ip",
+     "id": "c"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "refund",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59000,
+       "retry_after_ms": 59000
+      }
+     ],
+     "refunded": [
+      true,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000001000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "c",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000001000
+    }
+   }
+  },
+  {
+   "op": "commit",
+   "handle": "r",
+   "expect": {
+    "calls": [],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59000,
+       "retry_after_ms": 59000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "commit",
+   "handle": "r",
+   "expect": {
+    "calls": [],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59000,
+       "retry_after_ms": 59000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "reserve_all",
+   "handle": "s",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "user",
+     "id": "u"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "refund",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 4,
+       "reset_ms": 12000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 59000,
+       "retry_after_ms": 59000
+      }
+     ],
+     "refunded": [
+      true,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "handle": "s",
+   "expect": {
+    "calls": [],
+    "result": {
+     "refunded": [
+      true,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000001000
+    }
+   }
+  }
+ ]
+}

@@ -196,7 +196,8 @@
       "type": "object",
       "required": ["op"],
       "properties": {
-        "op": { "enum": ["check_all", "attempt", "check", "peek", "reset", "inspect", "fault", "heal"] },
+        "op": { "enum": ["check_all", "peek_all", "reserve_all", "commit", "cancel", "attempt", "check", "peek", "reset", "inspect", "fault", "heal"] },
+        "handle": { "type": "string", "description": "The pending a peek_all or reserve_all opens, or a commit or cancel settles." },
         "at_ms": { "type": "integer", "description": "Passed to store calls as now, for this step and the ones after it." },
         "entries": {
           "type": "array",
@@ -218,7 +219,7 @@
         "id": { "type": "string" },
         "cost": { "type": "integer" },
         "fault": { "enum": ["error", "timeout"] },
-        "on": { "type": "array", "minItems": 1, "items": { "enum": ["peek", "hit", "reset"] } },
+        "on": { "type": "array", "minItems": 1, "items": { "enum": ["peek", "hit", "reset", "refund"] } },
         "expect": {
           "type": "object",
           "additionalProperties": false,
@@ -231,7 +232,7 @@
                 "required": ["op", "limiter", "id"],
                 "additionalProperties": false,
                 "properties": {
-                  "op": { "enum": ["peek", "hit", "reset"] },
+                  "op": { "enum": ["peek", "hit", "reset", "refund"] },
                   "limiter": { "type": "string" },
                   "id": { "type": "string" },
                   "failed": { "const": true }
@@ -251,12 +252,19 @@
                     "governing": { "type": "integer", "minimum": 0 },
                     "decisions": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/short_decision" } },
                     "verified": { "type": ["boolean", "null"] },
-                    "verify_ran": { "type": "boolean" }
+                    "verify_ran": { "type": "boolean" },
+                    "refunded": { "$ref": "#/definitions/refunded", "description": "A pending: one value per decision." }
                   }
+                },
+                {
+                  "type": "object",
+                  "required": ["refunded"],
+                  "additionalProperties": false,
+                  "properties": { "refunded": { "$ref": "#/definitions/refunded", "description": "A cancel." } }
                 }
               ]
             },
-            "error": { "enum": ["value", "type", "state", "verify"], "description": "state is reserved." },
+            "error": { "enum": ["value", "type", "state", "verify"], "description": "state: a settlement that rule 8 refuses." },
             "state": {
               "type": "object",
               "required": ["level", "ts"],
@@ -267,6 +275,8 @@
       },
       "allOf": [
         { "if": { "properties": { "op": { "const": "check_all" } } }, "then": { "required": ["entries", "expect"] } },
+        { "if": { "properties": { "op": { "enum": ["peek_all", "reserve_all"] } } }, "then": { "required": ["handle", "entries", "expect"] } },
+        { "if": { "properties": { "op": { "enum": ["commit", "cancel"] } } }, "then": { "required": ["handle", "expect"] } },
         { "if": { "properties": { "op": { "const": "attempt" } } }, "then": { "required": ["lockout", "ids", "verify", "expect"] } },
         { "if": { "properties": { "op": { "enum": ["check", "peek", "reset"] } } }, "then": { "required": ["limiter", "id", "expect"] } },
         { "if": { "properties": { "op": { "const": "inspect" } } }, "then": { "required": ["limiter", "id", "expect"] } },
@@ -278,6 +288,11 @@
       "type": "object",
       "required": ["level", "ts"],
       "properties": { "level": { "type": "integer" }, "ts": { "type": "integer" } }
+    },
+    "refunded": {
+      "type": "array",
+      "items": { "type": ["boolean", "null"] },
+      "description": "true: given back; false: the refund failed and it stays counted; null: nothing to give back."
     },
     "refund": {
       "type": "object",
