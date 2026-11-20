@@ -1,0 +1,170 @@
+{
+ "spec": "1",
+ "id": "sequence/refund-overlapping-reservations",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 5,
+  "window_ms": 5000,
+  "burst": 5
+ },
+ "scope": "t",
+ "salt": "s",
+ "steps": [
+  {
+   "at_ms": 1700000000000,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 3,
+    "reset_ms": 2000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 10000,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=5",
+      "ratelimit": "\"t\";r=3;t=2"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "3",
+      "x-ratelimit-reset": "2"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000100,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 3900,
+    "retry_after_ms": null,
+    "state": {
+     "level": 19500,
+     "ts": 1700000000100
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=5",
+      "ratelimit": "\"t\";r=1;t=4"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "4"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000300,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 4700,
+    "retry_after_ms": null,
+    "state": {
+     "level": 23500,
+     "ts": 1700000000300
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=5",
+      "ratelimit": "\"t\";r=0;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000400,
+   "id": "a",
+   "op": "refund",
+   "of": 1,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 14500,
+     "ts": 1700000000400
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000900,
+   "id": "a",
+   "op": "refund",
+   "of": 0,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 6500,
+     "ts": 1700000000900
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000900,
+   "id": "a",
+   "op": "refund",
+   "of": 2,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 4500,
+     "ts": 1700000000900
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000900,
+   "id": "a",
+   "cost": 5,
+   "expect": {
+    "allowed": false,
+    "reason": "limited",
+    "status": 429,
+    "remaining": 4,
+    "reset_ms": 900,
+    "retry_after_ms": 900,
+    "state": {
+     "level": 4500,
+     "ts": 1700000000900
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=5;w=5",
+      "ratelimit": "\"t\";r=4;t=1",
+      "retry-after": "1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "5",
+      "x-ratelimit-remaining": "4",
+      "x-ratelimit-reset": "1",
+      "retry-after": "1"
+     }
+    }
+   }
+  }
+ ]
+}

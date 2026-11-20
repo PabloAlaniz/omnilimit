@@ -25,33 +25,55 @@
             "items": {
               "type": "object",
               "required": ["at_ms", "id"],
-              "if": { "required": ["op"], "properties": { "op": { "const": "reset" } } },
-              "then": { "not": { "required": ["expect"] } },
-              "else": { "required": ["expect"] },
+              "allOf": [
+                {
+                  "if": { "required": ["op"], "properties": { "op": { "const": "reset" } } },
+                  "then": { "not": { "anyOf": [{ "required": ["expect"] }, { "required": ["of"] }] } }
+                },
+                {
+                  "if": { "required": ["op"], "properties": { "op": { "const": "refund" } } },
+                  "then": {
+                    "required": ["of", "expect"],
+                    "not": { "required": ["cost"] },
+                    "properties": { "expect": { "$ref": "#/definitions/refund" } }
+                  }
+                },
+                {
+                  "if": { "not": { "required": ["op"], "properties": { "op": { "enum": ["reset", "refund"] } } } },
+                  "then": {
+                    "required": ["expect"],
+                    "not": { "required": ["of"] },
+                    "properties": {
+                      "expect": {
+                        "allOf": [
+                          { "$ref": "#/definitions/decision" },
+                          {
+                            "required": ["state"],
+                            "properties": {
+                              "state": { "$ref": "#/definitions/state" },
+                              "headers": {
+                                "type": "object",
+                                "required": ["draft-11", "legacy"]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
               "properties": {
                 "at_ms": { "type": "integer" },
                 "id": { "type": "string" },
-                "op": { "enum": ["peek", "reset"], "description": "Absent means hit." },
+                "op": { "enum": ["peek", "reset", "refund"], "description": "Absent means hit." },
                 "cost": { "type": "integer", "minimum": 2, "description": "Absent means 1." },
-                "expect": {
-                  "allOf": [
-                    { "$ref": "#/definitions/decision" },
-                    {
-                      "required": ["state"],
-                      "properties": {
-                        "state": {
-                          "type": "object",
-                          "required": ["level", "ts"],
-                          "properties": { "level": { "type": "integer" }, "ts": { "type": "integer" } }
-                        },
-                        "headers": {
-                          "type": "object",
-                          "required": ["draft-11", "legacy"]
-                        }
-                      }
-                    }
-                  ]
-                }
+                "of": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Refund only: the index of the earlier, allowed hit step it gives back."
+                },
+                "expect": { "type": "object" }
               }
             }
           }
@@ -90,11 +112,19 @@
       "then": {
         "required": ["fault", "on_store_error", "policy", "expect"],
         "properties": {
+          "op": { "const": "refund", "description": "Absent means check. A refund fails after its hit succeeded." },
           "fault": { "enum": ["error", "timeout", "missing_binding"] },
           "on_store_error": { "enum": ["open", "closed"] },
-          "policy": { "$ref": "#/definitions/policy" },
-          "expect": { "$ref": "#/definitions/decision" }
-        }
+          "policy": { "$ref": "#/definitions/policy" }
+        },
+        "if": { "required": ["op"] },
+        "then": {
+          "properties": {
+            "fault": { "enum": ["error", "timeout"] },
+            "expect": { "type": "object", "required": ["refunded"], "properties": { "refunded": { "const": false } }, "additionalProperties": false }
+          }
+        },
+        "else": { "properties": { "expect": { "$ref": "#/definitions/decision" } } }
       }
     },
     {
@@ -243,6 +273,20 @@
         { "if": { "properties": { "op": { "const": "fault" } } }, "then": { "required": ["limiter", "fault", "on"], "not": { "required": ["expect"] } } },
         { "if": { "properties": { "op": { "const": "heal" } } }, "then": { "required": ["limiter"], "not": { "required": ["expect"] } } }
       ]
+    },
+    "state": {
+      "type": "object",
+      "required": ["level", "ts"],
+      "properties": { "level": { "type": "integer" }, "ts": { "type": "integer" } }
+    },
+    "refund": {
+      "type": "object",
+      "required": ["refunded"],
+      "additionalProperties": false,
+      "properties": { "refunded": { "type": "boolean" }, "state": { "$ref": "#/definitions/state" } },
+      "if": { "properties": { "refunded": { "const": true } } },
+      "then": { "required": ["state"] },
+      "else": { "not": { "required": ["state"] } }
     },
     "policy": {
       "type": "object",

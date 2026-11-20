@@ -1,4 +1,4 @@
-import type { HitParams, Policy, RawHit } from './types.js';
+import type { HitParams, Policy, RawHit, RawRefund } from './types.js';
 
 const MIN_WINDOW_MS = 1000;
 const SCOPE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
@@ -91,6 +91,27 @@ export function applyPeek(state: MeterState | null, params: HitParams, nowMs: nu
   const t = Math.max(nowMs, ts);
   const drained = Math.max(0, level - Math.min(t - ts, params.drainMs) * params.limit);
   return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };
+}
+
+export interface RefundResult {
+  refund: RawRefund;
+  /** State to persist, or `null` when the refund changes nothing: then nothing is written. */
+  write: MeterState | null;
+}
+
+/**
+ * Give back a reservation of `params.windowMs` units counted at `sinceMs`, as far as it has not
+ * drained. See "Refund" in the spec.
+ */
+export function applyRefund(state: MeterState | null, params: HitParams, sinceMs: number, nowMs: number): RefundResult {
+  if (!state) return { refund: { level: 0, ts: nowMs }, write: null };
+  const t = Math.max(nowMs, state.ts);
+  const drained = Math.max(0, state.level - Math.min(t - state.ts, params.drainMs) * params.limit);
+  // A bucket older than the reservation was reset or expired since, and took it along.
+  const give = t < sinceMs ? 0 : Math.max(0, params.windowMs - Math.min(t - sinceMs, params.drainMs) * params.limit);
+  if (drained === 0 || give === 0) return { refund: { level: drained, ts: state.ts }, write: null };
+  const level = Math.max(0, drained - give);
+  return { refund: { level, ts: t }, write: { level, ts: t } };
 }
 
 export interface MeterView {

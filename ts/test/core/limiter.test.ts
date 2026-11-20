@@ -143,6 +143,108 @@ describe('peek and reset', () => {
   });
 });
 
+describe('reserve and refund', () => {
+  const policy = { limit: 2, windowMs: 60_000, scope: 't', onStoreError: 'closed' } as const;
+
+  it('reserve decides like check, and refund gives the request back', async () => {
+    const limiter = createLimiter({ ...policy, store: memoryStore() });
+    const first = await limiter.reserve('a', { cost: 2 });
+    expect(first.decision).toMatchObject({ allowed: true, remaining: 0 });
+    expect(first.reservation).toEqual({ scope: 't', cost: 2 });
+    const denied = await limiter.reserve('a');
+    expect(denied.decision).toMatchObject({ allowed: false, reason: 'limited' });
+    expect(denied.reservation).toBeNull();
+    expect(await limiter.refund(denied.reservation)).toBe(false);
+    expect(await limiter.refund(first.reservation)).toBe(true);
+    expect((await limiter.peek('a')).remaining).toBe(2);
+  });
+
+  it('refunds at most once, without calling the store again', async () => {
+    const memory = memoryStore();
+    const refund = vi.fn(memory.refund!);
+    const limiter = createLimiter({ ...policy, store: { ...memory, refund } });
+    const { reservation } = await limiter.reserve('a');
+    const twice = await Promise.all([limiter.refund(reservation), limiter.refund(reservation)]);
+    expect(twice.sort()).toEqual([false, true]);
+    expect(await limiter.refund(reservation)).toBe(false);
+    expect(refund).toHaveBeenCalledTimes(1);
+  });
+
+  it('only refunds reservations it made', async () => {
+    const store = memoryStore();
+    const one = createLimiter({ ...policy, store });
+    const other = createLimiter({ ...policy, store });
+    const { reservation } = await one.reserve('a');
+    await expect(other.refund(reservation)).rejects.toThrow(/not made by this limiter/);
+    await expect(one.refund({ scope: 't', cost: 1 })).rejects.toThrow(TypeError);
+    expect(await one.refund(reservation)).toBe(true);
+  });
+
+  it('throws a TypeError before counting when the store cannot refund', async () => {
+    const hit = vi.fn(async () => ({ allowed: true, level: null, ts: null }));
+    const limiter = createLimiter({ ...policy, store: { tier: 'approximate', hit } });
+    await expect(limiter.reserve('a')).rejects.toThrow(/does not support refund/);
+    expect(hit).not.toHaveBeenCalled();
+  });
+
+  it('reports events, and a failed refund resolves false and spends the reservation', async () => {
+    const memory = memoryStore();
+    let fail = true;
+    const store: Store = {
+      tier: 'exact',
+      hit: memory.hit,
+      peek: memory.peek!,
+      refund: (...args) => (fail ? new Promise(() => {}) : memory.refund!(...args)),
+    };
+    const events: Array<[string, string]> = [];
+    const limiter = createLimiter({ ...policy, store, storeTimeoutMs: 10, onEvent: (e) => events.push([e.type, e.op]) });
+    const lost = await limiter.reserve('a');
+    expect(await limiter.refund(lost.reservation)).toBe(false);
+    fail = false;
+    expect(await limiter.refund(lost.reservation)).toBe(false);
+    const kept = await limiter.reserve('a');
+    expect(await limiter.refund(kept.reservation)).toBe(true);
+    expect(events).toEqual([
+      ['allowed', 'check'],
+      ['store_error', 'refund'],
+      ['allowed', 'check'],
+      ['refund', 'refund'],
+    ]);
+    expect((await limiter.peek('a')).remaining).toBe(1);
+  });
+
+  it('a request allowed by a store failure is not a reservation', async () => {
+    const store: Store = { tier: 'exact', hit: () => Promise.reject(new Error('down')), refund: memoryStore().refund! };
+    const open = createLimiter({ ...policy, store, onStoreError: 'open' });
+    const { decision, reservation } = await open.reserve('a');
+    expect(decision).toMatchObject({ allowed: true, reason: 'store_error' });
+    expect(reservation).toBeNull();
+  });
+
+  it('gives back only what has not drained, on the real clock', async () => {
+    let clock = 1_000_000;
+    const limiter = createLimiter({ ...policy, limit: 1, windowMs: 1000, store: memoryStore({ now: () => clock }) });
+    const { reservation } = await limiter.reserve('a');
+    clock += 1000;
+    expect(await limiter.refund(reservation)).toBe(true);
+    const next = await limiter.check('a');
+    expect(next.allowed).toBe(true);
+    expect((await limiter.peek('a')).allowed).toBe(false);
+  });
+
+  it('memory refund does not keep a bucket alive against eviction', async () => {
+    const store = memoryStore({ maxKeys: 2 });
+    const params = { limit: 1, windowMs: 1000, capacity: 2000, drainMs: 2000 };
+    await store.hit('a', params, 5000);
+    await store.hit('a', params, 5000);
+    await store.hit('b', params, 5001);
+    expect(await store.refund!('a', params, 5000, 5002)).toEqual({ level: 1000, ts: 5002 });
+    await store.hit('c', params, 5003); // evicts `a`, the oldest write, despite its refund
+    expect(await store.refund!('a', params, 5000, 5004)).toEqual({ level: 0, ts: 5004 });
+    expect(await store.refund!('b', params, 5001, 5004)).toEqual({ level: 0, ts: 5004 });
+  });
+});
+
 describe('memoryStore', () => {
   it('rejects invalid maxKeys', () => {
     expect(() => memoryStore({ maxKeys: 0 })).toThrow(RangeError);

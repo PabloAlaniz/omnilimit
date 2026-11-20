@@ -3,7 +3,14 @@ import { Redis as IORedis } from 'ioredis';
 import pg from 'pg';
 import { createClient } from 'redis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_LUA, REDIS_PEEK_SHA1 } from '../../src/generated/assets.js';
+import {
+  REDIS_HIT_LUA,
+  REDIS_HIT_SHA1,
+  REDIS_PEEK_LUA,
+  REDIS_PEEK_SHA1,
+  REDIS_REFUND_LUA,
+  REDIS_REFUND_SHA1,
+} from '../../src/generated/assets.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { fromRowQuery, MIGRATION_SQL, postgresStore } from '../../src/stores/postgres.js';
 import { fromIoredis, fromNodeRedis, redisStore } from '../../src/stores/redis.js';
@@ -118,6 +125,27 @@ for (const url of redisUrls) {
       expect(await io.exists(key)).toBe(0);
     });
 
+    it('refund loads its own script, writes only what it gives back, and keeps the TTL', async () => {
+      await io.script('FLUSH');
+      const key = `ol:test:${randomUUID()}`;
+      const params = { limit: 1, windowMs: 5000, capacity: 10_000, drainMs: 10_000 };
+      expect(await ioStore.refund!(key, params, 1_000_000, 1_000_000)).toEqual({ level: 0, ts: 1_000_000 });
+      expect(await io.exists(key)).toBe(0);
+      expect(await io.script('EXISTS', REDIS_REFUND_SHA1)).toEqual([1]);
+      expect(await io.script('LOAD', REDIS_REFUND_LUA)).toBe(REDIS_REFUND_SHA1);
+      await ioStore.hit(key, params);
+      const { ts } = await ioStore.hit(key, params);
+      expect(await nodeStore.refund!(key, params, ts!)).toMatchObject({ level: expect.any(Number) });
+      expect(Number(await io.hget(key, 'l'))).toBeLessThanOrEqual(5000);
+      const ttl = await io.pttl(key);
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(10_000);
+      // A reservation older than the bucket gives nothing, and nothing is written.
+      const before = await io.hgetall(key);
+      expect(await ioStore.refund!(key, params, ts! + 60_000)).toMatchObject({ ts: Number(before['t']) });
+      expect(await io.hgetall(key)).toEqual(before);
+    });
+
     suite('ioredis', () => ioStore);
     suite('node-redis', () => nodeStore);
   });
@@ -169,6 +197,21 @@ for (const url of postgresUrls) {
       expect(await read()).toEqual(before);
       await store.reset!(key);
       expect(await read()).toEqual([]);
+    });
+
+    it('refund writes nothing for a missing row or when it gives nothing', async () => {
+      const key = `ol:test:${randomUUID()}`;
+      const params = { limit: 1, windowMs: 5000, capacity: 10_000, drainMs: 10_000 };
+      const read = async () => (await pool.query('SELECT level, ts_ms, expires_at_ms FROM omnilimit_state WHERE key = $1', [key])).rows;
+      expect(await store.refund!(key, params, 1_000_000, 1_000_000)).toEqual({ level: 0, ts: 1_000_000 });
+      expect(await read()).toEqual([]);
+      await store.hit(key, params, 1_000_000);
+      await store.hit(key, params, 1_000_000);
+      const before = await read();
+      expect(await store.refund!(key, params, 1_000_000, 1_006_000)).toEqual({ level: 4000, ts: 1_000_000 });
+      expect(await read()).toEqual(before);
+      expect(await store.refund!(key, params, 1_000_000, 1_001_000)).toEqual({ level: 5000, ts: 1_001_000 });
+      expect(await read()).toEqual([{ level: '5000', ts_ms: '1001000', expires_at_ms: '1011000' }]);
     });
 
     suite('pg', () => store);

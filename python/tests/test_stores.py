@@ -30,8 +30,13 @@ from support import (
     vectors_of,
 )
 
-from omnilimit import AsyncLimiter, HitParams, Limiter
-from omnilimit._generated import REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_SHA1
+from omnilimit import AsyncLimiter, HitParams, Limiter, RawRefund
+from omnilimit._generated import (
+    REDIS_HIT_LUA,
+    REDIS_HIT_SHA1,
+    REDIS_PEEK_SHA1,
+    REDIS_REFUND_SHA1,
+)
 from omnilimit.stores.postgres import MIGRATION_SQL, AsyncPostgresStore, PostgresStore
 from omnilimit.stores.redis import AsyncRedisStore, RedisStore
 
@@ -164,6 +169,44 @@ def test_redis_reset_deletes_the_bucket(sync_redis: Any) -> None:
     store.reset(key)  # a missing bucket is fine
 
 
+def test_redis_refund_loads_its_script_and_writes_only_what_it_gives(sync_redis: Any) -> None:
+    key = f"ol:test:{uuid.uuid4()}"
+    store = RedisStore(sync_redis)
+    params = HitParams(limit=1, window_ms=5000, capacity=10_000, drain_ms=10_000)
+    sync_redis.script_flush()
+    assert store.refund(key, params, 1_000_000, 1_000_000) == RawRefund(0, 1_000_000)
+    assert sync_redis.exists(key) == 0
+    assert sync_redis.script_exists(REDIS_REFUND_SHA1) == [True]
+    store.hit(key, params)
+    since = store.hit(key, params).ts
+    assert since is not None
+    store.refund(key, params, since)
+    assert int(sync_redis.hget(key, "l")) <= 5000
+    assert 0 < sync_redis.pttl(key) <= 10_000
+    # A reservation newer than the bucket was reset away: nothing is given or written.
+    before = sync_redis.hgetall(key)
+    assert store.refund(key, params, since + 60_000).ts == int(
+        before[b"t" if b"t" in before else "t"]
+    )
+    assert sync_redis.hgetall(key) == before
+
+
+def test_async_redis_refund(async_redis_factory: Any) -> None:
+    async def run() -> None:
+        client = async_redis_factory()
+        try:
+            await client.script_flush()
+            key = f"ol:test:{uuid.uuid4()}"
+            store = AsyncRedisStore(client)
+            await store.hit(key, PARAMS, 1_000_000)
+            assert await store.refund(key, PARAMS, 1_000_000, 1_001_000) == RawRefund(0, 1_001_000)
+            assert (await store.hit(key, PARAMS, 1_001_000)).allowed
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
 def test_redis_other_errors_are_not_retried_as_noscript() -> None:
     class Broken:
         def evalsha(self, *args: Any) -> Any:
@@ -184,6 +227,9 @@ def test_redis_unexpected_reply(reply: Any) -> None:
 
     with pytest.raises(ValueError, match="unexpected reply"):
         RedisStore(Odd()).hit("k", PARAMS)
+    if reply != [1, 2]:
+        with pytest.raises(ValueError, match="unexpected reply"):
+            RedisStore(Odd()).refund("k", PARAMS, 0)
 
 
 def test_async_redis_other_errors_are_not_retried_as_noscript() -> None:
@@ -390,6 +436,29 @@ def test_postgres_no_rows_is_an_error() -> None:
         PostgresStore(Db()).hit("k", PARAMS)
     with pytest.raises(ValueError, match="omnilimit_peek_v1 returned no rows"):
         PostgresStore(Db()).peek("k", PARAMS)
+    with pytest.raises(ValueError, match="omnilimit_refund_v1 returned no rows"):
+        PostgresStore(Db()).refund("k", PARAMS, 0)
+
+
+def test_postgres_refund_writes_only_what_it_gives(pg_pool: ConnectionPool) -> None:
+    store = PostgresStore(pg_pool)
+    key = f"ol:test:{uuid.uuid4()}"
+    params = HitParams(limit=1, window_ms=5000, capacity=10_000, drain_ms=10_000)
+    sql = "SELECT level, ts_ms, expires_at_ms FROM omnilimit_state WHERE key = %s"
+
+    def read() -> list[Any]:
+        with pg_pool.connection() as connection:
+            return connection.execute(sql, (key,)).fetchall()
+
+    assert store.refund(key, params, 1_000_000, 1_000_000) == RawRefund(0, 1_000_000)
+    assert read() == []
+    store.hit(key, params, 1_000_000)
+    store.hit(key, params, 1_000_000)
+    before = read()
+    assert store.refund(key, params, 1_000_000, 1_006_000) == RawRefund(4000, 1_000_000)
+    assert read() == before
+    assert store.refund(key, params, 1_000_000, 1_001_000) == RawRefund(5000, 1_001_000)
+    assert read() == [(5000, 1_001_000, 1_011_000)]
 
 
 async def _async_pool(url: str) -> AsyncConnectionPool:
@@ -406,6 +475,9 @@ def test_async_postgres_pool_peek_and_reset(pg_url: str) -> None:
             key = f"ol:test:{uuid.uuid4()}"
             await store.hit(key, PARAMS, 1_000_000)
             assert not (await store.peek(key, PARAMS, 1_000_000)).allowed
+            assert (await store.refund(key, PARAMS, 1_000_000, 1_000_000)).level == 0
+            assert (await store.peek(key, PARAMS, 1_000_000)).allowed
+            await store.hit(key, PARAMS, 1_000_000)
             await store.reset(key)
             assert (await store.peek(key, PARAMS, 1_000_000)).allowed
         finally:
@@ -461,6 +533,8 @@ def test_async_postgres_connection_and_cleanup(pg_url: str) -> None:
             assert (await store.peek(key, PARAMS, 1_001_000)).level == 4000
             await store.reset(key)
             assert (await store.peek(key, PARAMS, 1_001_000)).level == 0
+            await store.hit(key, PARAMS, 1_000_000)
+            assert await store.refund(key, PARAMS, 1_000_000, 1_000_000) == RawRefund(0, 1_000_000)
             await store.hit(key, PARAMS, 1_000_000)
             assert await store.cleanup() >= 1
         finally:

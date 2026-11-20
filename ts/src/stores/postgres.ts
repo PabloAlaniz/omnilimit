@@ -1,5 +1,5 @@
 import { POSTGRES_MIGRATION_SQL } from '../generated/assets.js';
-import type { HitParams, RawHit, Store } from '../core/types.js';
+import type { HitParams, RawHit, RawRefund, Store } from '../core/types.js';
 
 /** Structurally compatible with a `pg` Pool or Client. */
 export interface PgQueryable {
@@ -32,7 +32,8 @@ export interface PostgresStore extends Store {
 
 /**
  * SQL creating the table and functions. Apply it with your migration tool; it never runs on its
- * own. It is idempotent, so applying it again after an upgrade adds what is new (`peek`).
+ * own. It is idempotent, so applying it again after an upgrade adds what is new (`peek` in 0.2,
+ * `refund` in 0.4).
  */
 export const MIGRATION_SQL = POSTGRES_MIGRATION_SQL;
 
@@ -68,6 +69,20 @@ export function postgresStore(db: PgQueryable): PostgresStore {
     peek: (key, params, nowMs) => call(db, 'omnilimit_peek_v1', key, params, nowMs),
     async reset(key: string): Promise<void> {
       await db.query('DELETE FROM omnilimit_state WHERE key = $1', [key]);
+    },
+    async refund(key: string, params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund> {
+      const { rows } = await db.query('SELECT new_level, new_ts FROM omnilimit_refund_v1($1, $2, $3, $4, $5, $6, $7)', [
+        key,
+        params.limit,
+        params.windowMs,
+        params.capacity,
+        params.drainMs,
+        sinceMs,
+        nowMs ?? null,
+      ]);
+      const row = rows[0];
+      if (!row) throw new Error('omnilimit: omnilimit_refund_v1 returned no rows');
+      return { level: Number(row['new_level']), ts: Number(row['new_ts']) };
     },
     async cleanup(batch = 1000): Promise<number> {
       const { rows } = await db.query('SELECT omnilimit_cleanup_v1($1) AS deleted', [batch]);

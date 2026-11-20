@@ -169,7 +169,73 @@ def _failure_view(decision: Any) -> dict[str, Any]:
     }
 
 
-@_by_id("failure")
+_REFUND_FAILURES = [v for v in vectors_of("failure") if v.get("op") == "refund"]
+_CHECK_FAILURES = [v for v in vectors_of("failure") if "op" not in v]
+_refund_failures = pytest.mark.parametrize("vector", _REFUND_FAILURES, ids=lambda v: v["id"])
+_check_failures = pytest.mark.parametrize("vector", _CHECK_FAILURES, ids=lambda v: v["id"])
+
+
+@_refund_failures
+def test_refund_failure(vector: dict[str, Any]) -> None:
+    # The hit succeeds, so there is a reservation; only its refund fails.
+    release = threading.Event()
+    memory = MemoryStore()
+
+    class Store:
+        tier = "exact"
+        hit = memory.hit
+
+        def refund(self, *args: Any) -> Any:
+            if vector["fault"] == "timeout":
+                release.wait(5)
+            raise ConnectionError("store down")
+
+    events: list[tuple[str, str]] = []
+    limiter = Limiter(
+        **policy_of(vector),
+        store=Store(),
+        scope="t",
+        on_store_error=vector["on_store_error"],
+        store_timeout_ms=20,
+        on_event=lambda e: events.append((e.type, e.op)),
+    )
+    try:
+        reservation = limiter.reserve("a").reservation
+        assert {"refunded": limiter.refund(reservation)} == vector["expect"]
+        assert events == [("allowed", "check"), ("store_error", "refund")]
+    finally:
+        release.set()
+
+
+@_refund_failures
+def test_refund_failure_async(vector: dict[str, Any]) -> None:
+    memory = MemoryStore()
+
+    class Store:
+        tier = "exact"
+
+        async def hit(self, *args: Any) -> RawHit:
+            return memory.hit(*args)
+
+        async def refund(self, *args: Any) -> Any:
+            if vector["fault"] == "timeout":
+                await asyncio.sleep(3600)
+            raise ConnectionError("store down")
+
+    async def run() -> bool:
+        limiter = AsyncLimiter(
+            **policy_of(vector),
+            store=Store(),
+            scope="t",
+            on_store_error=vector["on_store_error"],
+            store_timeout_ms=20,
+        )
+        return await limiter.refund((await limiter.reserve("a")).reservation)
+
+    assert {"refunded": asyncio.run(run())} == vector["expect"]
+
+
+@_check_failures
 def test_failure(vector: dict[str, Any]) -> None:
     # Python has no platform binding: a missing one fails like any other store error.
     hanging = _Hanging()
@@ -187,7 +253,7 @@ def test_failure(vector: dict[str, Any]) -> None:
         hanging.release.set()
 
 
-@_by_id("failure")
+@_check_failures
 def test_failure_async(vector: dict[str, Any]) -> None:
     store = _AsyncHanging() if vector["fault"] == "timeout" else _AsyncFailing()
     limiter = AsyncLimiter(

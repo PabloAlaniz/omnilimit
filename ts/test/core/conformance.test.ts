@@ -71,7 +71,33 @@ describe('ip vectors', () => {
 });
 
 describe('failure vectors', () => {
-  it.each(vectorsOf('failure').map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
+  const checks = vectorsOf('failure').filter((v) => v.op === undefined);
+  const refunds = vectorsOf('failure').filter((v) => v.op === 'refund');
+
+  it.each(refunds.map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
+    // The hit succeeds, so there is a reservation; only its refund fails.
+    const memory = memoryStore();
+    const faults: Record<string, NonNullable<Store['refund']>> = {
+      error: async () => {
+        throw new Error('store down');
+      },
+      timeout: () => new Promise(() => {}),
+    };
+    const events: string[] = [];
+    const limiter = createLimiter({
+      ...toPolicy(vector.policy),
+      store: { tier: 'exact', hit: memory.hit, refund: faults[vector.fault]! },
+      scope: 't',
+      onStoreError: vector.on_store_error,
+      storeTimeoutMs: 20,
+      onEvent: (event) => events.push(`${event.type}:${event.op}`),
+    });
+    const { reservation } = await limiter.reserve('a');
+    expect({ refunded: await limiter.refund(reservation) }).toEqual(vector.expect);
+    expect(events).toEqual(['allowed:check', 'store_error:refund']);
+  });
+
+  it.each(checks.map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
     const stores: Record<string, Store> = {
       error: {
         tier: 'exact',

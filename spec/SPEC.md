@@ -99,6 +99,68 @@ the work and refuse when denied, hit when the work fails, reset when it succeeds
 Sequence vectors mark these steps with `op: "peek"` or `op: "reset"`; a step without `op` is a
 hit. Reset steps have no `expect`.
 
+## Refund
+
+A refund gives back a hit that was counted for work that then did not happen, such as a request
+cancelled after it was admitted. It is a third operation next to the hit, and like peek and reset
+it is part of the `exact` and `local` tiers; an `approximate` store cannot refund, and the
+limiter raises a type error when asked.
+
+**Reservation.** A reservation is an allowed hit together with what is needed to undo it: the
+key, the cost `k`, and `since`, the timestamp the hit stored (the store's clock at the hit, `ts`
+after it). A denied hit wrote nothing, so it is not a reservation and cannot be refunded. Neither
+is a decision allowed by `open` after a store failure: nothing was counted.
+
+**Refund** at store time `now`, for a reservation of cost `k` made at `since`:
+
+```text
+t     = max(now, ts)                                ts = now if the bucket is absent
+lvl   = max(0, level - min(t - ts, drain) * L)
+give  = 0                                           if t < since
+      = max(0, k*W - min(t - since, drain) * L)     otherwise
+
+if the bucket is absent, lvl = 0 or give = 0:   nothing is written; reports {lvl, ts}
+otherwise:   level = max(0, lvl - give); ts = t; expire after drain; reports {level, ts}
+```
+
+`give` is what is left of the reservation's own units after the meter drained for `t - since`.
+Capping that time at `drain` changes nothing (`k*W <= C <= drain * L`) and keeps every value
+below `2^53`. A refund only adds, subtracts, multiplies and compares, like the hit, so the store
+scripts need no division. A refund that changes nothing writes nothing, as a denial does.
+
+**Why it is safe.** A refund never leaves a bucket more generous than if the reservation had
+never been counted. Compare the real bucket with the one where every other step happened as it
+did and the reservation was not counted. Right after the reservation the real level is higher by
+`k*W`. A hit that both count adds the same to each, and draining for `d` milliseconds shrinks the
+difference by at most `d * L`, because both levels stop at 0. So at `t` the real level is at least
+the other one plus `give`, and taking `give` away cannot go below it. This assumes a store clock
+that does not go backwards; one that does is still never refunded more than `k*W`. The generator
+checks the comparison on every refund it can, by replaying the sequence without the reserved hit.
+
+A bucket that was reset or expired after the reservation no longer holds it:
+
+- When the bucket is absent, or its time is still before `since` (it was recreated by a clock
+  that went backwards), nothing is given back.
+- Otherwise the reset is not detected. If hits were counted after it, the refund takes up to
+  `give` from them, so do not refund a reservation across a reset you made yourself. The
+  comparison above does not cover this case.
+
+A reservation is refunded at most once. The limiter spends it when its refund starts, whatever the
+outcome, and never retries: a refund that fails or times out may still have been applied, and the
+ambiguity resolves to the reservation staying counted. Like a reset, a refund that fails or times
+out is reported as such and does not follow `open`/`closed`. A reservation belongs to the limiter
+that made it.
+
+Sequence vectors mark these steps with `op: "refund"` and `of`, the index of the earlier hit step
+being given back, which was allowed. The cost and `since` (its `state.ts`) come from that step.
+`expect` holds `refunded` and, when it is `true`, the `state` the store reported. A second refund
+of the same step expects `refunded: false`, without a store call.
+
+Refund is required of `exact` and `local` stores, as peek and reset are: their sequence vectors
+include refund steps. The spec version stays 1 because no earlier vector changed meaning. A store
+written before refund existed still serves check, peek and reset, and a limiter on it refuses to
+reserve with a type error, as it does on an `approximate` store.
+
 ## Recipes
 
 Two compositions of check, peek and reset are common enough to have a fixed meaning. They add
@@ -185,7 +247,9 @@ Key: `ol:1:<scope>:<L>-<W>-<B>:<hash>`, where `hash` is the first 32 hex charact
 - `scope` matches `^[A-Za-z0-9._-]{1,64}$`.
 
 Peek uses `spec/scripts/redis/peek.lua` and `omnilimit_peek_v1` (`spec/scripts/postgres/002_peek.sql`,
-which takes no lock). Reset is `DEL` in Redis and `DELETE` in Postgres.
+which takes no lock). Reset is `DEL` in Redis and `DELETE` in Postgres. Refund uses
+`spec/scripts/redis/refund.lua` and `omnilimit_refund_v1` (`spec/scripts/postgres/003_refund.sql`,
+which locks the row like the hit); both take `since` after the arguments of the hit.
 
 | Store | Layout | Clock |
 |---|---|---|
@@ -265,7 +329,7 @@ The effective window is the retry time when denied, the time until the next unit
 | `sequence` | Decisions, public values, headers and raw state, step by step |
 | `key` | Key derivation |
 | `ip` | Client IP strategies, canonical form and masking |
-| `failure` | Each fault with each failure mode |
+| `failure` | Each fault with each failure mode, and a refund that fails |
 | `concurrency` | 200 simultaneous hits allow exactly `burst` |
 | `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
 | `recipe` | Combined checks and lockouts: store calls in order, decisions, the governing one, and errors |

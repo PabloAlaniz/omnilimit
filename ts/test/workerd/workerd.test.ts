@@ -46,6 +46,10 @@ function compare(vector: Vector, decisions: Vector[]): void {
       expect(d, `${vector.id} step ${index}`).toEqual({ reset: true });
       return;
     }
+    if (vector.steps[index].op === 'refund') {
+      expect(d, `${vector.id} step ${index}`).toEqual({ refunded: vector.steps[index].expect.refunded });
+      return;
+    }
     const want = vector.steps[index].expect;
     expect(
       { allowed: d.allowed, reason: d.reason, status: d.status, remaining: d.remaining, reset_ms: d.resetMs, retry_after_ms: d.retryAfterMs, headers: d.headers },
@@ -92,6 +96,14 @@ describe('workerd', () => {
     expect(result.first.allowed).toBe(true);
     expect(result.denied.reason).toBe('limited');
     expect(result.reset).toBe(true);
+    expect(result.after.allowed).toBe(true);
+  });
+
+  it('durable object: refund with the real clock gives the unit back once', async () => {
+    const result = await call({ op: 'real-refund', store: 'do', salt: randomUUID() });
+    expect(result.denied.reason).toBe('limited');
+    expect(result.refunded).toBe(true);
+    expect(result.again).toBe(false);
     expect(result.after.allowed).toBe(true);
   });
 

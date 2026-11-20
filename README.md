@@ -122,6 +122,23 @@ const decision = await limiter.check(userId, { cost: items.length });
 
 A denied request counts nothing, whatever its cost. The cost is an integer from 1 to the `burst`; a larger one could never pass, so it throws instead of denying. Adapters take `cost: (context) => number`.
 
+### Give back a request whose work did not happen
+
+Count first, and give the request back if its work is cancelled:
+
+```ts
+const { decision, reservation } = await limiter.reserve(userId, { cost: items.length });
+if (!decision.allowed) return tooMany(decision);
+try {
+  await work();
+} catch (error) {
+  await limiter.refund(reservation); // only what has not drained yet
+  throw error;
+}
+```
+
+`reserve` decides like `check`. `refund` gives back what is left of the request after the meter drained since it was counted, so a bucket never ends up more generous than if the request had never happened: at once, it leaves no trace; after the meter drained its units, it gives nothing. A reservation is refunded at most once, and only by the limiter that made it. `refund` resolves `false` instead of throwing when the store fails, and does not retry, since a timed-out refund may have been applied. It needs an `exact` or `local` store. See the [spec](spec/SPEC.md#refund).
+
 ### Limits from configuration
 
 A policy can come from a string, with the same strict grammar in every port:

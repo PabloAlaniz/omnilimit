@@ -25,6 +25,8 @@ from omnilimit._types import (
     OnStoreError,
     Op,
     RawHit,
+    Reservation,
+    Reserved,
     Store,
     Tier,
 )
@@ -44,7 +46,7 @@ def _timeout_for(store: Any, given: int | None) -> int:
     return default if isinstance(default, int) else _DEFAULT_STORE_TIMEOUT_MS
 
 
-def _store_method(store: Any, op: Literal["peek", "reset"]) -> Any:
+def _store_method(store: Any, op: Literal["peek", "reset", "refund"]) -> Any:
     """The store's optional method, or a `TypeError`: a missing one is a configuration error."""
     method = getattr(store, op, None)
     if not callable(method):
@@ -82,6 +84,7 @@ class _Core:
         self.headers = headers
         self.salt = salt
         self.on_event = on_event
+        self._spend_lock = threading.Lock()
 
     def key(self, id_value: str) -> str:
         return derive_key(self.scope, self.policy, self.salt, id_value)
@@ -174,6 +177,33 @@ class _Core:
 
     def report_reset(self) -> None:
         self._emit(LimiterEvent("reset", self.scope, self.tier, op="reset"))
+
+    def report_refund(self) -> None:
+        self._emit(LimiterEvent("refund", self.scope, self.tier, op="refund"))
+
+    def reserved(
+        self, decision: Decision, hit: RawHit | None, key: str, params: HitParams, cost: int
+    ) -> Reserved:
+        # Only what the store counted can be given back: not a denial, not an `open` failure.
+        if hit is None or not hit.allowed or hit.ts is None:
+            return Reserved(decision, None)
+        reservation = Reservation(
+            owner=self, scope=self.scope, cost=cost, key=key, params=params, since=hit.ts
+        )
+        return Reserved(decision, reservation)
+
+    def spend(self, reservation: Reservation | None) -> Reservation | None:
+        """Mark a reservation refunded, returning it, or `None` when nothing is left to refund."""
+        if reservation is None:
+            return None
+        if not isinstance(reservation, Reservation) or reservation._owner is not self:
+            raise TypeError("omnilimit: this reservation was not made by this limiter")
+        # Spent before the store call, so a second refund, even a concurrent one, does nothing.
+        with self._spend_lock:
+            if reservation._spent:
+                return None
+            reservation._spent = True
+            return reservation
 
 
 def _run_with_timeout(
@@ -269,12 +299,17 @@ class Limiter:
             return call()
         return _run_with_timeout(call, self._core.timeout_s, self._slots)
 
-    def _decide(self, op: Op, call: Callable[[], RawHit], amount: int | None = None) -> Decision:
+    def _decide_raw(
+        self, op: Op, call: Callable[[], RawHit], amount: int | None = None
+    ) -> tuple[Decision, RawHit | None]:
         try:
             hit = self._call(call)
         except Exception as error:
-            return self._core.from_failure(error, op)
-        return self._core.from_hit(hit, op, amount)
+            return self._core.from_failure(error, op), None
+        return self._core.from_hit(hit, op, amount), hit
+
+    def _decide(self, op: Op, call: Callable[[], RawHit], amount: int | None = None) -> Decision:
+        return self._decide_raw(op, call, amount)[0]
 
     def check(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """Count one request for `id_value`.
@@ -314,6 +349,42 @@ class Limiter:
             self._core.report_failure(error, "reset")
             return False
         self._core.report_reset()
+        return True
+
+    def reserve(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Reserved:
+        """`check`, keeping what is needed to give the request back with `refund`.
+
+        The decision is the one `check` would give. `reservation` is `None` when nothing was
+        counted. Raises `TypeError` if the store cannot refund, before counting anything.
+        """
+        _store_method(self._store, "refund")
+        params = self._core.weighed(cost)
+        key = self._core.key(id_value)
+        decision, hit = self._decide_raw(
+            "check", lambda: self._store.hit(key, params, now_ms), params.window_ms
+        )
+        return self._core.reserved(decision, hit, key, params, cost)
+
+    def refund(self, reservation: Reservation | None, *, now_ms: int | None = None) -> bool:
+        """Give back a reservation, as far as it has not drained yet.
+
+        A request refunded at once leaves no trace; one refunded after the meter drained its
+        units gives nothing. Returns `True` once applied, and `False` for `None`, for a
+        reservation already refunded (without calling the store), or if the store failed or timed
+        out, which `on_event` reports. It never raises for a store failure and never retries: a
+        refund that timed out may have been applied, and the reservation is spent either way.
+        Raises `TypeError` for a reservation from another limiter.
+        """
+        held = self._core.spend(reservation)
+        if held is None:
+            return False
+        refund = _store_method(self._store, "refund")
+        try:
+            self._call(lambda: refund(held._key, held._params, held._since, now_ms))
+        except Exception as error:
+            self._core.report_failure(error, "refund")
+            return False
+        self._core.report_refund()
         return True
 
 
@@ -364,12 +435,17 @@ class AsyncLimiter:
             return await asyncio.wait_for(result, self._core.timeout_s)
         return result
 
-    async def _decide(self, op: Op, call: Callable[[], Any], amount: int | None = None) -> Decision:
+    async def _decide_raw(
+        self, op: Op, call: Callable[[], Any], amount: int | None = None
+    ) -> tuple[Decision, RawHit | None]:
         try:
             hit: RawHit = await self._call(call)
         except Exception as error:
-            return self._core.from_failure(error, op)
-        return self._core.from_hit(hit, op, amount)
+            return self._core.from_failure(error, op), None
+        return self._core.from_hit(hit, op, amount), hit
+
+    async def _decide(self, op: Op, call: Callable[[], Any], amount: int | None = None) -> Decision:
+        return (await self._decide_raw(op, call, amount))[0]
 
     async def check(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """Count one request for `id_value`. See `Limiter.check`."""
@@ -396,4 +472,28 @@ class AsyncLimiter:
             self._core.report_failure(error, "reset")
             return False
         self._core.report_reset()
+        return True
+
+    async def reserve(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Reserved:
+        """`check`, keeping what is needed to give the request back. See `Limiter.reserve`."""
+        _store_method(self._store, "refund")
+        params = self._core.weighed(cost)
+        key = self._core.key(id_value)
+        decision, hit = await self._decide_raw(
+            "check", lambda: self._store.hit(key, params, now_ms), params.window_ms
+        )
+        return self._core.reserved(decision, hit, key, params, cost)
+
+    async def refund(self, reservation: Reservation | None, *, now_ms: int | None = None) -> bool:
+        """Give back a reservation, as far as it has not drained yet. See `Limiter.refund`."""
+        held = self._core.spend(reservation)
+        if held is None:
+            return False
+        refund = _store_method(self._store, "refund")
+        try:
+            await self._call(lambda: refund(held._key, held._params, held._since, now_ms))
+        except Exception as error:
+            self._core.report_failure(error, "refund")
+            return False
+        self._core.report_refund()
         return True

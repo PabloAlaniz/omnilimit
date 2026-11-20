@@ -1,5 +1,5 @@
-import { applyHit, applyPeek, type MeterState } from '../core/gcra.js';
-import type { HitParams, RawHit, Store } from '../core/types.js';
+import { applyHit, applyPeek, applyRefund, type MeterState } from '../core/gcra.js';
+import type { HitParams, RawHit, RawRefund, Store } from '../core/types.js';
 
 export interface MemoryStoreOptions {
   /** Bucket cap, so rotating ids cannot exhaust memory. Oldest buckets go first. Defaults to 100000. */
@@ -48,6 +48,12 @@ export function memoryStore(options: MemoryStoreOptions = {}): Store {
     },
     async reset(key: string): Promise<void> {
       entries.delete(key);
+    },
+    async refund(key: string, params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund> {
+      const { refund, write } = applyRefund(entries.get(key) ?? null, params, sinceMs, nowMs ?? clock());
+      // Updated in place: giving back a request does not make its bucket more recent.
+      if (write) entries.set(key, { ...write, expiresAt: write.ts + params.drainMs });
+      return refund;
     },
   };
 }

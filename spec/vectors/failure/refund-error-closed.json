@@ -1,0 +1,16 @@
+{
+ "spec": "1",
+ "id": "failure/refund-error-closed",
+ "kind": "failure",
+ "op": "refund",
+ "fault": "error",
+ "on_store_error": "closed",
+ "policy": {
+  "limit": 5,
+  "window_ms": 60000,
+  "burst": 5
+ },
+ "expect": {
+  "refunded": false
+ }
+}

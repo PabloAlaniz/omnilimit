@@ -1,0 +1,472 @@
+{
+ "spec": "1",
+ "id": "sequence/refund-random-007",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 2,
+  "window_ms": 1009,
+  "burst": 4
+ },
+ "scope": "t",
+ "salt": "s",
+ "steps": [
+  {
+   "at_ms": 1700000001821,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 3,
+    "reset_ms": 505,
+    "retry_after_ms": null,
+    "state": {
+     "level": 1009,
+     "ts": 1700000001821
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=3;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "3",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000003154,
+   "id": "a",
+   "op": "refund",
+   "of": 0,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 0,
+     "ts": 1700000001821
+    }
+   }
+  },
+  {
+   "at_ms": 1700000005172,
+   "id": "b",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 3,
+    "reset_ms": 505,
+    "retry_after_ms": null,
+    "state": {
+     "level": 1009,
+     "ts": 1700000005172
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=3;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "3",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000006181,
+   "id": "a",
+   "op": "peek",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 4,
+    "reset_ms": 0,
+    "retry_after_ms": null,
+    "state": {
+     "level": 0,
+     "ts": 1700000001821
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=4;t=0"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "4",
+      "x-ratelimit-reset": "0"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000006198,
+   "id": "b",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 2,
+    "reset_ms": 1009,
+    "retry_after_ms": null,
+    "state": {
+     "level": 2018,
+     "ts": 1700000006198
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=2;t=2"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "2",
+      "x-ratelimit-reset": "2"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000007207,
+   "id": "b",
+   "op": "refund",
+   "of": 4,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 0,
+     "ts": 1700000006198
+    }
+   }
+  },
+  {
+   "at_ms": 1700000008216,
+   "id": "a",
+   "cost": 4,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 2018,
+    "retry_after_ms": null,
+    "state": {
+     "level": 4036,
+     "ts": 1700000008216
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=0;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000009225,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 2018,
+    "retry_after_ms": null,
+    "state": {
+     "level": 4036,
+     "ts": 1700000009225
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=0;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000010225,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 1523,
+    "retry_after_ms": null,
+    "state": {
+     "level": 3045,
+     "ts": 1700000010225
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=0;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000011234,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 1018,
+    "retry_after_ms": null,
+    "state": {
+     "level": 2036,
+     "ts": 1700000011234
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=1;t=2"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "2"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000011739,
+   "id": "b",
+   "op": "refund",
+   "of": 2,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 0,
+     "ts": 1700000006198
+    }
+   }
+  },
+  {
+   "at_ms": 1700000012243,
+   "id": "a",
+   "op": "refund",
+   "of": 7,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 18,
+     "ts": 1700000011234
+    }
+   }
+  },
+  {
+   "at_ms": 1700000012748,
+   "id": "a",
+   "cost": 4,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 2018,
+    "retry_after_ms": null,
+    "state": {
+     "level": 4036,
+     "ts": 1700000012748
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=0;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000012748,
+   "id": "b",
+   "cost": 4,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 2018,
+    "retry_after_ms": null,
+    "state": {
+     "level": 4036,
+     "ts": 1700000012748
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=0;t=1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000013748,
+   "id": "a",
+   "op": "refund",
+   "of": 6,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 2036,
+     "ts": 1700000012748
+    }
+   }
+  },
+  {
+   "at_ms": 1700000013749,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": false,
+    "reason": "limited",
+    "status": 429,
+    "remaining": 1,
+    "reset_ms": 1017,
+    "retry_after_ms": 8,
+    "state": {
+     "level": 2034,
+     "ts": 1700000012748
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=1;t=1",
+      "retry-after": "1"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "1",
+      "retry-after": "1"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000014082,
+   "id": "b",
+   "op": "refund",
+   "of": 13,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 0,
+     "ts": 1700000014082
+    }
+   }
+  },
+  {
+   "at_ms": 1700000015082,
+   "id": "b",
+   "op": "refund",
+   "of": 13,
+   "expect": {
+    "refunded": false
+   }
+  },
+  {
+   "at_ms": 1700000015082,
+   "id": "a",
+   "cost": 3,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 1514,
+    "retry_after_ms": null,
+    "state": {
+     "level": 3027,
+     "ts": 1700000015082
+    },
+    "headers": {
+     "draft-11": {
+      "ratelimit-policy": "\"t\";q=2;w=2",
+      "ratelimit": "\"t\";r=1;t=2"
+     },
+     "legacy": {
+      "x-ratelimit-limit": "2",
+      "x-ratelimit-remaining": "1",
+      "x-ratelimit-reset": "2"
+     }
+    }
+   }
+  },
+  {
+   "at_ms": 1700000015083,
+   "id": "a",
+   "op": "reset"
+  },
+  {
+   "at_ms": 1700000015083,
+   "id": "b",
+   "op": "refund",
+   "of": 13,
+   "expect": {
+    "refunded": false
+   }
+  },
+  {
+   "at_ms": 1700000015588,
+   "id": "a",
+   "op": "reset"
+  },
+  {
+   "at_ms": 1700000016092,
+   "id": "a",
+   "op": "refund",
+   "of": 18,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 0,
+     "ts": 1700000016092
+    }
+   }
+  }
+ ]
+}

@@ -23,6 +23,9 @@ export type {
   LimiterOptions,
   Policy,
   RawHit,
+  RawRefund,
+  Reservation,
+  Reserved,
   Store,
   Tier,
 } from './core/types.js';
