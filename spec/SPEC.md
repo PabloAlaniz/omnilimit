@@ -297,12 +297,45 @@ or check on failure.
 - A bound on verifications in advisory mode. Attempts that overlap can all pass the peek before
   any of them is counted, so an advisory lockout can run the verification more than `burst`
   times. Each unit freed lets through about the attacker's rate times the time between the peek
-  and the failure being counted.
+  and the failure being counted. The failures are still counted one at a time, so no more than
+  the burst of them is allowed under each limit.
 - Atomicity in reserve mode, which bounds verifications instead: every verification runs on a
   unit already counted, so no more verifications are in flight than the limits have units, under
   any concurrency, and a window admits no more than the limit's own rate. The bound holds up to
   the compensation round trip described above, and only by denying more. Prefer reserve mode for
   credential checks.
+
+### Recipes under concurrency
+
+A `concurrency` vector may run a recipe instead of plain hits: `requests` callers at once, all
+with the same ids, every store call at `at_ms`. With the clock fixed nothing drains, so a refund
+gives back all its reservation took and units are only released by refunds. `recipe.op` is one of:
+
+- `gate`: every caller opens a gate of the lockout given as `{limits, mode}`, with `ids`; once
+  all are open, all of them settle with `settle` (`fail`) at once.
+- `attempt`: every caller makes an attempt whose verification answers `verify` (`false`).
+- `reserve_all`: every caller opens a pending of `entries`; once all are open, the first `commit`
+  allowed ones in request order commit and every other one cancels, all at once.
+- `check_all`: every caller runs `check_all` of `entries`.
+
+A port runs them with real parallelism: several connections or a pool for stores that have one,
+threads for blocking code. No store call may fail. Then:
+
+| Field | Promise |
+|---|---|
+| `expect_allowed` | Exactly this many results are allowed: gates, attempts, pendings or combined results |
+| `expect_allowed_at_most` | At most this many, and at least one |
+| `expect_verify_ran` | Exactly this many verifications ran |
+| `expect_counted` | The units of the allowed hits under each limiter, a hit weighing its cost |
+| `expect_levels` | Each limiter's level at `at_ms` once every request settled |
+| `levels_within_capacity` | Each of those levels is at most `burst * window_ms` |
+| `levels_match_counted` | Each of those levels is the units counted under it times `window_ms` |
+
+Exact values are written only where every interleaving gives the same one, and the generator
+checks that on many random interleavings of the requests' store calls. Advisory gates all pass
+their peek, so `expect_allowed` there is every request, and `expect_counted` shows that each limit
+still allowed only its burst of failures. A reserve gate holds a unit of every limit while its
+verification runs, so allowed gates and verifications never exceed the smallest burst.
 
 ### Recipe vectors
 
@@ -416,7 +449,7 @@ The effective window is the retry time when denied, the time until the next unit
 | `key` | Key derivation |
 | `ip` | Client IP strategies, canonical form and masking |
 | `failure` | Each fault with each failure mode, and a refund that fails |
-| `concurrency` | 200 simultaneous hits allow exactly `burst` |
+| `concurrency` | 200 simultaneous hits allow exactly `burst`; recipes run by many callers at once keep their bounds |
 | `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
 | `recipe` | Combined checks, pending checks and lockouts: store calls in order, decisions, the governing one, refunds, and errors |
 

@@ -1,0 +1,59 @@
+{
+ "spec": "1",
+ "id": "concurrency/lockout-advisory-fail-counts-exactly-the-burst",
+ "kind": "concurrency",
+ "tiers": [
+  "exact"
+ ],
+ "salt": "s",
+ "at_ms": 1700000000000,
+ "limiters": {
+  "pair": {
+   "scope": "pair",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  },
+  "shared": {
+   "scope": "shared",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "requests": 20,
+ "recipe": {
+  "op": "gate",
+  "lockout": {
+   "limits": [
+    {
+     "limiter": "pair"
+    },
+    {
+     "limiter": "shared"
+    }
+   ]
+  },
+  "ids": [
+   "u:a",
+   "a"
+  ],
+  "settle": "fail"
+ },
+ "expect_allowed": 20,
+ "expect_counted": {
+  "pair": 3,
+  "shared": 5
+ },
+ "expect_levels": {
+  "pair": 180000,
+  "shared": 300000
+ },
+ "levels_match_counted": true
+}

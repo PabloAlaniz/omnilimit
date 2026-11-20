@@ -1,0 +1,47 @@
+{
+ "spec": "1",
+ "id": "concurrency/check-all-keeps-the-invariants",
+ "kind": "concurrency",
+ "tiers": [
+  "exact"
+ ],
+ "salt": "s",
+ "at_ms": 1700000000000,
+ "limiters": {
+  "a": {
+   "scope": "a",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 6
+   },
+   "on_store_error": "closed"
+  },
+  "b": {
+   "scope": "b",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 4
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "requests": 30,
+ "recipe": {
+  "op": "check_all",
+  "entries": [
+   {
+    "limiter": "a",
+    "id": "x"
+   },
+   {
+    "limiter": "b",
+    "id": "y"
+   }
+  ]
+ },
+ "expect_allowed_at_most": 4,
+ "levels_within_capacity": true,
+ "levels_match_counted": true
+}

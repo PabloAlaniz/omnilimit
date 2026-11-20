@@ -81,6 +81,7 @@ const scripts = [
   ['lua: loses digits with tostring', 'spec/scripts/redis/hit.lua', "'l', string.format('%.0f', new_level), 't', string.format('%.0f', t))", "'l', tostring(new_level), 't', tostring(t))"],
   ['lua: no expiry', 'spec/scripts/redis/hit.lua', "  redis.call('PEXPIRE', KEYS[1], drain_ms)\n", ''],
   ['sql: no row lock', 'spec/scripts/postgres/001_v1.sql', '  WHERE s.key = p_key\n  FOR UPDATE;', '  WHERE s.key = p_key;'],
+  ['sql refund: no row lock', 'spec/scripts/postgres/003_refund.sql', '  WHERE s.key = p_key\n  FOR UPDATE;', '  WHERE s.key = p_key;'],
   ['sql: denied requests write state', 'spec/scripts/postgres/001_v1.sql', '    RETURN QUERY SELECT false, v_drained, v_ts;', '    UPDATE omnilimit_state AS s SET level = v_drained, ts_ms = v_t WHERE s.key = p_key;\n    RETURN QUERY SELECT false, v_drained, v_t;'],
   ['lua peek: does not drain', 'spec/scripts/redis/peek.lua', 'local drained = math.max(0, level - math.min(t - ts, drain_ms) * limit)', 'local drained = level'],
   ['lua peek: capacity check is off by one', 'spec/scripts/redis/peek.lua', 'if drained + window_ms <= capacity then', 'if drained + window_ms < capacity then'],

@@ -599,7 +599,8 @@ def concurrency() -> dict[str, dict]:
             "hits": 200,
             "at_ms": BASE,
             "expect_allowed": 25,
-        }
+        },
+        **recipe_concurrency(),
     }
 
 
@@ -1644,6 +1645,267 @@ def recipes() -> dict[str, dict]:
             else:
                 timeline.append(one(kind, rng.choice(names), rng.choice("uvab"), at=when))
         out[f"recipe/lockout-random-{n:03d}"] = recipe(f"recipe/lockout-random-{n:03d}", limiters, timeline, lockouts)
+    return out
+
+
+def concurrent_requests(limiters: dict, recipe_: dict, requests: int, schedule: random.Random | None) -> dict:
+    """Run `requests` copies of a recipe at once, one store call at a time, in an interleaving
+    `schedule` picks, or one request after another without it. Independent of `RecipeModel`:
+    each request is a coroutine that yields before every store call.
+
+    Returns the summary a port reports: allowed results, verifications run, the units counted by
+    the settling phase under each limiter, and each limiter's level once everything settled.
+    """
+    meters: dict[str, Meter] = {}
+    for name, config in limiters.items():
+        p = config["policy"]
+        meters[name] = Meter(p["limit"], p["window_ms"], p["burst"])
+    op = recipe_["op"]
+    if op in ("gate", "attempt"):
+        lockout = recipe_["lockout"]
+        mode = lockout.get("mode", "advisory")
+        entries = [{"limiter": limit["limiter"], "id": who} for limit, who in zip(lockout["limits"], recipe_["ids"])]
+    else:
+        mode = "peek" if op == "check_all" else "reserve"
+        entries = recipe_["entries"]
+    names = [e["limiter"] for e in entries]
+    assert len(set(names)) == len(names), "one entry per limiter: levels are reported per limiter"
+    cost = lambda e: e.get("cost", 1)  # noqa: E731
+    counted = {name: 0 for name in names}
+    verify_ran = 0
+
+    def opening(out: dict):
+        """Peek or reserve every entry, as a gate, a pending or the first half of check_all does."""
+        held = []
+        if mode in ("advisory", "peek"):
+            allowed = True
+            for e in entries:
+                yield
+                allowed = meters[e["limiter"]].peek(BASE, cost(e))["allowed"] and allowed
+            out.update(allowed=allowed, held=[])
+            return
+        for e in entries:
+            yield
+            r = meters[e["limiter"]].hit(BASE, cost(e))
+            if not r["allowed"]:
+                for h, since in held:
+                    yield
+                    meters[h["limiter"]].refund(BASE, since, cost(h))
+                out.update(allowed=False, held=[])
+                return
+            held.append((e, r["state"]["ts"]))
+        out.update(allowed=True, held=held)
+
+    def counting(out: dict, stop: bool):
+        """Check every entry, as a commit in peek mode (stops at a denial) or an advisory fail."""
+        for e in entries:
+            yield
+            r = meters[e["limiter"]].hit(BASE, cost(e))
+            if r["allowed"]:
+                counted[e["limiter"]] += cost(e)
+            else:
+                out["allowed"] = False
+                if stop:
+                    return
+
+    def run(coroutines: list) -> None:
+        live = list(coroutines)
+        while live:
+            pick = schedule.randrange(len(live)) if schedule else 0
+            try:
+                next(live[pick])
+            except StopIteration:
+                live.pop(pick)
+
+    opened = [{} for _ in range(requests)]
+    if op == "check_all":
+
+        def check_all(out: dict):
+            yield from opening(out)
+            if out["allowed"]:
+                yield from counting(out, stop=True)
+
+        run([check_all(out) for out in opened])
+    elif op == "attempt":
+        assert recipe_["verify"] is False and mode == "reserve", "an advisory attempt has no bound to assert"
+
+        def attempt(out: dict):
+            nonlocal verify_ran
+            yield from opening(out)
+            if out["allowed"]:
+                verify_ran += 1
+
+        run([attempt(out) for out in opened])
+    else:
+        # Two phases: every request opens, and once all have, every request settles.
+        run([opening(out) for out in opened])
+        if op == "gate":
+            assert recipe_["settle"] == "fail"
+            if mode == "advisory":
+                # A gate's own result stays allowed: what its failure met is not counted here.
+                run([counting({}, stop=False) for out in opened if out["allowed"]])
+        else:
+            keep = recipe_["commit"]
+            allowed_in_order = [out for out in opened if out["allowed"]]
+
+            def cancel(out: dict):
+                for h, since in out["held"]:
+                    yield
+                    meters[h["limiter"]].refund(BASE, since, cost(h))
+
+            run([cancel(out) for out in allowed_in_order[keep:]])
+    return {
+        "allowed": sum(out["allowed"] for out in opened),
+        "verify_ran": verify_ran,
+        "counted": counted,
+        "levels": {name: meters[name].level_at(BASE) for name in names},
+    }
+
+
+def serial_by_recipe_model(limiters: dict, recipe_: dict, requests: int, levels: dict) -> int:
+    """Self-check: the requests one after another, through `RecipeModel`, end with `levels`.
+    Returns how many were allowed."""
+    op = recipe_["op"]
+    lockouts = {"l": recipe_["lockout"]} if "lockout" in recipe_ else None
+    model = RecipeModel(limiters, lockouts)
+    step = lambda **kw: model.step({"at_ms": BASE, **kw})["expect"]  # noqa: E731
+    if op == "check_all":
+        results = [step(op="check_all", entries=recipe_["entries"])["result"] for _ in range(requests)]
+    elif op == "attempt":
+        results = [step(op="attempt", lockout="l", ids=recipe_["ids"], verify=recipe_["verify"])["result"] for _ in range(requests)]
+    elif op == "gate":
+        results = [step(op="gate", lockout="l", ids=recipe_["ids"], handle=f"g{i}")["result"] for i in range(requests)]
+        for i in range(requests):
+            step(op=recipe_["settle"], handle=f"g{i}")
+    else:
+        results = [step(op="reserve_all", handle=f"p{i}", entries=recipe_["entries"])["result"] for i in range(requests)]
+        keep = [i for i, r in enumerate(results) if r["allowed"]][: recipe_["commit"]]
+        for i in range(requests):
+            step(op="commit" if i in keep else "cancel", handle=f"p{i}")
+    entries = recipe_.get("entries") or [{"limiter": lim_["limiter"], "id": who} for lim_, who in zip(recipe_["lockout"]["limits"], recipe_["ids"])]
+    assert {e["limiter"]: model.meter(e["limiter"], e["id"]).level_at(BASE) for e in entries} == levels
+    return sum(r["allowed"] for r in results)
+
+
+def concurrency_recipe(vector_id: str, limiters: dict, recipe_: dict, requests: int, exact: set[str]) -> dict:
+    """A recipe run by `requests` callers at once.
+
+    `exact` names what every interleaving must agree on (`allowed`, `verify_ran`, `counted`,
+    `levels`): those are written as exact values, the rest as bounds. Each exact claim rests on
+    an argument given where the vector is declared; the model replays the requests in many random
+    interleavings, one store call at a time, and fails if any of them disagrees or breaks a bound.
+    """
+    serial = concurrent_requests(limiters, recipe_, requests, None)
+    assert serial["allowed"] == serial_by_recipe_model(limiters, recipe_, requests, serial["levels"]), vector_id
+    rng = random.Random(vector_id)
+    runs = [concurrent_requests(limiters, recipe_, requests, rng) for _ in range(300)]
+    window = {name: c["policy"]["window_ms"] for name, c in limiters.items()}
+    capacity = {name: c["policy"]["burst"] * window[name] for name, c in limiters.items()}
+    op = recipe_["op"]
+    advisory = op == "gate" and recipe_["lockout"].get("mode", "advisory") == "advisory"
+    weights = [(e["limiter"], e.get("cost", 1)) for e in recipe_.get("entries", [])]
+    weights += [(limit["limiter"], 1) for limit in recipe_.get("lockout", {}).get("limits", [])]
+    smallest = min(capacity[name] // (window[name] * cost) for name, cost in weights)
+    for r in runs:
+        # The bounds every interleaving keeps. An advisory gate only peeks: it has none.
+        assert advisory or r["allowed"] <= smallest
+        assert r["verify_ran"] <= smallest
+        assert all(level <= capacity[name] for name, level in r["levels"].items())
+        # What the settling phase counted is exactly what the buckets hold.
+        assert not (op == "check_all" or advisory) or all(r["levels"][n] == r["counted"][n] * window[n] for n in r["levels"])
+        for claim in exact:
+            assert r[claim] == serial[claim], f"{vector_id}: {claim} differs between interleavings"
+    vector: dict = {
+        "spec": SPEC,
+        "id": vector_id,
+        "kind": "concurrency",
+        "tiers": ["exact"],
+        "salt": "s",
+        "at_ms": BASE,
+        "limiters": limiters,
+        "requests": requests,
+        "recipe": recipe_,
+    }
+    if "allowed" in exact:
+        vector["expect_allowed"] = serial["allowed"]
+    else:
+        vector["expect_allowed_at_most"] = smallest
+    if op == "attempt":
+        assert "verify_ran" in exact
+        vector["expect_verify_ran"] = serial["verify_ran"]
+    if "counted" in exact:
+        vector["expect_counted"] = serial["counted"]
+    if "levels" in exact:
+        vector["expect_levels"] = serial["levels"]
+    else:
+        vector["levels_within_capacity"] = True
+    if op == "check_all" or advisory:
+        vector["levels_match_counted"] = True
+    return vector
+
+
+def recipe_concurrency() -> dict[str, dict]:
+    """Recipes under real concurrency: what deterministic timelines cannot show.
+
+    Every request uses the same ids and the clock is fixed, so nothing drains and a refund gives
+    back all its reservation took. Units are then only released by refunds, which is what makes
+    the exact claims below hold in every interleaving.
+    """
+    out = {}
+    for name, limiters, recipe_, requests, exact in [
+        # Advisory: no gate counts anything, so all of them pass their peek. Then every failure
+        # checks every limit without stopping, and a limit allows exactly its burst of checks.
+        # This is what lets an advisory lockout run more verifications than its burst.
+        (
+            "lockout-advisory-fail-counts-exactly-the-burst",
+            {"pair": lim("pair", 1, 60_000, 3), "shared": lim("shared", 1, 60_000, 5)},
+            {"op": "gate", "lockout": {"limits": [{"limiter": "pair"}, {"limiter": "shared"}]}, "ids": ["u:a", "a"], "settle": "fail"},
+            20,
+            {"allowed", "counted", "levels"},
+        ),
+        # Reserve, the larger burst first. The last limit's units are held for good by allowed
+        # gates, so at most its burst pass; a request it denies holds the first limit only until
+        # its refund lands. If fewer passed, the last limit never denied, so every request that
+        # got the first limit passed, and with more requests than units the first limit filled
+        # up with them. So exactly the smaller burst passes, and both levels hold that many.
+        (
+            "lockout-reserve-gates-never-exceed-the-smallest-burst",
+            {"shared": lim("shared", 1, 60_000, 5), "pair": lim("pair", 1, 60_000, 3)},
+            {"op": "gate", "lockout": {"limits": [{"limiter": "shared"}, {"limiter": "pair"}], "mode": "reserve"}, "ids": ["a", "u:a"], "settle": "fail"},
+            20,
+            {"allowed", "levels"},
+        ),
+        # The same argument with attempts: a verification only runs on an allowed gate, and a
+        # failed one gives nothing back, so no more verifications run than the smaller burst.
+        (
+            "lockout-reserve-bounds-the-verifications",
+            {"shared": lim("shared", 1, 60_000, 4), "pair": lim("pair", 1, 60_000, 2)},
+            {"op": "attempt", "lockout": {"limits": [{"limiter": "shared"}, {"limiter": "pair"}], "mode": "reserve"}, "ids": ["a", "u:a"], "verify": False},
+            20,
+            {"allowed", "verify_ran", "levels"},
+        ),
+        # Every request opens, and only then do they settle: the first `commit` allowed ones in
+        # request order commit, every other one cancels. Opening is the gate above, so exactly
+        # the smaller burst is allowed, here `b`'s 6 units at a cost of 2; the cancels give back
+        # everything they took, so the levels are what the commits hold.
+        (
+            "reserve-all-allows-at-most-the-smallest-burst-and-restores-the-rest",
+            {"a": lim("a", 1, 60_000, 4), "b": lim("b", 1, 60_000, 6)},
+            {"op": "reserve_all", "entries": [{"limiter": "a", "id": "x"}, {"limiter": "b", "id": "y", "cost": 2}], "commit": 2},
+            20,
+            {"allowed", "levels"},
+        ),
+        # Peek mode is advisory: only bounds, and the buckets hold exactly what the commits counted.
+        (
+            "check-all-keeps-the-invariants",
+            {"a": lim("a", 1, 60_000, 6), "b": lim("b", 1, 60_000, 4)},
+            {"op": "check_all", "entries": [{"limiter": "a", "id": "x"}, {"limiter": "b", "id": "y"}]},
+            30,
+            set(),
+        ),
+    ]:
+        vector_id = f"concurrency/{name}"
+        out[vector_id] = concurrency_recipe(vector_id, limiters, recipe_, requests, exact)
     return out
 
 

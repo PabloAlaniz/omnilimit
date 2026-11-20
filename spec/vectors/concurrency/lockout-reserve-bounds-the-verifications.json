@@ -1,0 +1,56 @@
+{
+ "spec": "1",
+ "id": "concurrency/lockout-reserve-bounds-the-verifications",
+ "kind": "concurrency",
+ "tiers": [
+  "exact"
+ ],
+ "salt": "s",
+ "at_ms": 1700000000000,
+ "limiters": {
+  "shared": {
+   "scope": "shared",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 4
+   },
+   "on_store_error": "closed"
+  },
+  "pair": {
+   "scope": "pair",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "requests": 20,
+ "recipe": {
+  "op": "attempt",
+  "lockout": {
+   "limits": [
+    {
+     "limiter": "shared"
+    },
+    {
+     "limiter": "pair"
+    }
+   ],
+   "mode": "reserve"
+  },
+  "ids": [
+   "a",
+   "u:a"
+  ],
+  "verify": false
+ },
+ "expect_allowed": 2,
+ "expect_verify_ran": 2,
+ "expect_levels": {
+  "shared": 120000,
+  "pair": 120000
+ }
+}
