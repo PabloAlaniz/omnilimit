@@ -1,0 +1,700 @@
+{
+ "spec": "1",
+ "id": "recipe/lockout-random-010",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "a": {
+   "scope": "a",
+   "policy": {
+    "limit": 3,
+    "window_ms": 10000,
+    "burst": 3
+   },
+   "on_store_error": "open"
+  },
+  "b": {
+   "scope": "b",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "lockouts": {
+  "login": {
+   "limits": [
+    {
+     "limiter": "a"
+    },
+    {
+     "limiter": "b"
+    }
+   ],
+   "mode": "advisory"
+  }
+ },
+ "timeline": [
+  {
+   "op": "gate",
+   "at_ms": 1700000000533,
+   "lockout": "login",
+   "ids": [
+    "u",
+    "a"
+   ],
+   "handle": "g0",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "at_ms": 1700000000866,
+   "handle": "g0",
+   "expect": {
+    "calls": [],
+    "result": {
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "gate",
+   "at_ms": 1700000000883,
+   "lockout": "login",
+   "ids": [
+    "u",
+    "a"
+   ],
+   "handle": "g1",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "handle": "g1",
+   "expect": {
+    "calls": [],
+    "result": {
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "fail",
+   "at_ms": 1700000000884,
+   "handle": "g1",
+   "expect": {
+    "calls": [],
+    "error": "state"
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "v",
+    "a"
+   ],
+   "verify": "raise",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "a"
+     }
+    ],
+    "error": "verify"
+   }
+  },
+  {
+   "op": "check",
+   "at_ms": 1700000001884,
+   "limiter": "a",
+   "id": "a",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 2,
+     "reset_ms": 3334,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "gate",
+   "at_ms": 1700000006884,
+   "lockout": "login",
+   "ids": [
+    "v",
+    "b"
+   ],
+   "handle": "g2",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "gate",
+   "at_ms": 1700000007217,
+   "lockout": "login",
+   "ids": [
+    "u",
+    "b"
+   ],
+   "handle": "g3",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000012217,
+   "lockout": "login",
+   "ids": [
+    "u",
+    "b"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     },
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "reset",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "resets": [
+      true,
+      true
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000017217,
+   "lockout": "login",
+   "ids": [
+    "u",
+    "b"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     },
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "reset",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "resets": [
+      true,
+      true
+     ]
+    }
+   }
+  },
+  {
+   "op": "succeed",
+   "at_ms": 1700000017234,
+   "handle": "g3",
+   "expect": {
+    "calls": [
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "reset",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "resets": [
+      true,
+      true
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "fault",
+   "limiter": "b",
+   "fault": "error",
+   "on": [
+    "hit"
+   ]
+  },
+  {
+   "op": "fail",
+   "at_ms": 1700000022251,
+   "handle": "g3",
+   "expect": {
+    "calls": [],
+    "error": "state"
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "v",
+    "b"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "hit",
+      "limiter": "b",
+      "id": "b",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 3334,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000023251,
+   "lockout": "login",
+   "ids": [
+    "v",
+    "b"
+   ],
+   "verify": "raise",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "error": "verify"
+   }
+  },
+  {
+   "op": "fault",
+   "limiter": "a",
+   "fault": "error",
+   "on": [
+    "refund",
+    "hit",
+    "peek",
+    "reset"
+   ]
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000023584,
+   "lockout": "login",
+   "ids": [
+    "v",
+    "b"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "b",
+      "id": "b"
+     },
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "v",
+      "failed": true
+     },
+     {
+      "op": "reset",
+      "limiter": "b",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ],
+     "resets": [
+      false,
+      true
+     ]
+    }
+   }
+  },
+  {
+   "op": "check",
+   "at_ms": 1700000023585,
+   "limiter": "a",
+   "id": "a",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "a",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "store_error",
+     "status": null,
+     "remaining": null,
+     "reset_ms": null,
+     "retry_after_ms": null
+    }
+   }
+  }
+ ]
+}

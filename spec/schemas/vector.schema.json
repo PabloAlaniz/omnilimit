@@ -160,17 +160,24 @@
           "lockouts": {
             "type": "object",
             "additionalProperties": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "object",
-                "required": ["limiter"],
-                "additionalProperties": false,
-                "properties": {
-                  "limiter": { "type": "string" },
-                  "reset_on_success": { "type": "boolean", "description": "Absent means true." }
+              "oneOf": [
+                {
+                  "type": "array",
+                  "description": "The earlier form: one limiter, advisory, the id as subject.",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": { "$ref": "#/definitions/lockout_limit" }
+                },
+                {
+                  "type": "object",
+                  "required": ["limits"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "limits": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/lockout_limit" } },
+                    "mode": { "enum": ["advisory", "reserve"], "description": "Absent means advisory." }
+                  }
                 }
-              }
+              ]
             }
           },
           "timeline": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/recipe_step" } }
@@ -179,6 +186,15 @@
     }
   ],
   "definitions": {
+    "lockout_limit": {
+      "type": "object",
+      "required": ["limiter"],
+      "additionalProperties": false,
+      "properties": {
+        "limiter": { "type": "string" },
+        "reset_on_success": { "type": "boolean", "description": "Absent means true." }
+      }
+    },
     "short_decision": {
       "type": "object",
       "required": ["allowed", "reason", "status", "remaining", "reset_ms", "retry_after_ms"],
@@ -196,8 +212,8 @@
       "type": "object",
       "required": ["op"],
       "properties": {
-        "op": { "enum": ["check_all", "peek_all", "reserve_all", "commit", "cancel", "attempt", "check", "peek", "reset", "inspect", "fault", "heal"] },
-        "handle": { "type": "string", "description": "The pending a peek_all or reserve_all opens, or a commit or cancel settles." },
+        "op": { "enum": ["check_all", "peek_all", "reserve_all", "commit", "cancel", "gate", "fail", "succeed", "attempt", "check", "peek", "reset", "inspect", "fault", "heal"] },
+        "handle": { "type": "string", "description": "The pending or gate a step opens or settles." },
         "at_ms": { "type": "integer", "description": "Passed to store calls as now, for this step and the ones after it." },
         "entries": {
           "type": "array",
@@ -253,7 +269,8 @@
                     "decisions": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/short_decision" } },
                     "verified": { "type": ["boolean", "null"] },
                     "verify_ran": { "type": "boolean" },
-                    "refunded": { "$ref": "#/definitions/refunded", "description": "A pending: one value per decision." }
+                    "refunded": { "$ref": "#/definitions/refunded", "description": "A pending or a gate, or a success: one value per decision." },
+                    "resets": { "$ref": "#/definitions/refunded", "description": "A success: one value per limit, true, false or null as for refunded." }
                   }
                 },
                 {
@@ -276,7 +293,8 @@
       "allOf": [
         { "if": { "properties": { "op": { "const": "check_all" } } }, "then": { "required": ["entries", "expect"] } },
         { "if": { "properties": { "op": { "enum": ["peek_all", "reserve_all"] } } }, "then": { "required": ["handle", "entries", "expect"] } },
-        { "if": { "properties": { "op": { "enum": ["commit", "cancel"] } } }, "then": { "required": ["handle", "expect"] } },
+        { "if": { "properties": { "op": { "enum": ["commit", "cancel", "fail", "succeed"] } } }, "then": { "required": ["handle", "expect"] } },
+        { "if": { "properties": { "op": { "const": "gate" } } }, "then": { "required": ["lockout", "ids", "handle", "expect"] } },
         { "if": { "properties": { "op": { "const": "attempt" } } }, "then": { "required": ["lockout", "ids", "verify", "expect"] } },
         { "if": { "properties": { "op": { "enum": ["check", "peek", "reset"] } } }, "then": { "required": ["limiter", "id", "expect"] } },
         { "if": { "properties": { "op": { "const": "inspect" } } }, "then": { "required": ["limiter", "id", "expect"] } },

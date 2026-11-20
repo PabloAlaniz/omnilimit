@@ -74,7 +74,7 @@ if not attempt.allowed:
     ...  # the verification did not run
 ```
 
-With an `AsyncLimiter`, use `check_all_async` and `AsyncLockout`. Both are built on `peek`, so they are not atomic. `peek_all` and `reserve_all` split a combined check in two around work that may not happen, and `reserve_all` counts first and refunds, so it never lets more through: see [recipes](https://github.com/PabloAlaniz/omnilimit/blob/main/docs/recipes.md).
+`Lockout(limits=[LockoutLimit(...), ...], mode="reserve")` counts each failure under several limits and never runs the verification more often than they allow. With an `AsyncLimiter`, use `check_all_async` and `AsyncLockout`. Both are built on `peek`, so they are not atomic. `peek_all` and `reserve_all` split a combined check in two around work that may not happen, and `reserve_all` counts first and refunds, so it never lets more through: see [recipes](https://github.com/PabloAlaniz/omnilimit/blob/main/docs/recipes.md).
 
 ## Sync or async
 

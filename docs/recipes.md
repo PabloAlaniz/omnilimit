@@ -6,7 +6,7 @@ A few compositions of `check`, `peek`, `reset`, `reserve` and `refund` come up o
 |---|---|---|
 | Several limits on one request | `checkAll(entries)` | `check_all(entries)`, `check_all_async(entries)` |
 | The same, around work that may not happen | `peekAll(entries)`, `reserveAll(entries)` | `peek_all`, `reserve_all`, and their `_async` forms |
-| Count only failures | `createLockout({ limiter })` | `Lockout(limiter)`, `AsyncLockout(limiter)` |
+| Count only failures | `createLockout({ limiter })` or `createLockout({ limits, mode })` | `Lockout(limiter)` or `Lockout(limits=..., mode=...)`, and `AsyncLockout` |
 
 They need stores that can peek, so not the `approximate` tier, and `reserveAll` needs stores that can refund. Every entry is checked before the first store call: an empty list, a cost a limit does not accept or an `approximate` limiter raises an error and touches no store. Both are tested by the shared `recipe` vectors, down to the order of every store call.
 
@@ -99,28 +99,84 @@ A pending settles once. Calling the same method again answers with the first res
 ```ts
 import { createLockout } from 'omnilimit';
 
-const logins = createLockout({ limiter: failedLogins });
-const attempt = await logins.attempt(id, () => passwordMatches(email, password));
+const lockout = createLockout({ limiter: failures });
+const attempt = await lockout.attempt(id, () => secretMatches(id, secret));
 ```
 
 ```python
 from omnilimit import Lockout
 
-logins = Lockout(failed_logins)
-attempt = logins.attempt(id, lambda: password_matches(email, password))
+lockout = Lockout(failures)
+attempt = lockout.attempt(id, lambda: secret_matches(id, secret))
 ```
 
 | `attempt.allowed` | `attempt.verified` | Meaning | `attempt.decision` |
 |---|---|---|---|
 | `false` | `null` | Too many failures. The verification did not run | The denial to answer with |
-| `true` | `true` | Verified. The count was cleared | What the peek saw |
+| `true` | `true` | Verified. The count was cleared | What the gate saw |
 | `true` | `false` | Wrong. This attempt was counted | The decision that counted it |
+
+`attempt.decisions` holds one decision per limit, and after a success `attempt.resets` says which limits were reset (`true`), failed to reset (`false`) or do not reset (`null`).
 
 The limiter's policy is the budget of failures: `limit: 5, windowMs: 900_000` tolerates five wrong attempts and then gives one back every three minutes.
 
-Things to decide:
+### Several limits, and reserve mode
 
-- **The id.** `email` alone lets anyone lock an account out by failing on purpose. `email:ip` avoids that but lets an attacker spread guesses across addresses. Many sites use both, one lockout each.
-- **`resetOnSuccess: false`** keeps the failures after a success. Use it when the id is shared, such as an IP behind which many people log in, so one person's success does not clear everyone's count.
+Most credential checks want more than one limit: one per account, so guesses spread across addresses still add up, and one per address, so one address cannot lock out every account by failing on purpose. Give the lockout `limits`, each with the id it takes from the subject:
+
+```ts
+const lockout = createLockout<{ account: string; ip: string }>({
+  limits: [
+    { limiter: perAccount, idOf: (s) => s.account },
+    { limiter: perIp, idOf: (s) => s.ip, resetOnSuccess: false },
+  ],
+  mode: 'reserve',
+});
+
+const attempt = await lockout.attempt({ account, ip }, () => secretMatches(account, secret));
+```
+
+```python
+from omnilimit import Lockout, LockoutLimit
+
+lockout = Lockout(
+    limits=[
+        LockoutLimit(per_account, id_of=lambda s: s["account"]),
+        LockoutLimit(per_ip, id_of=lambda s: s["ip"], reset_on_success=False),
+    ],
+    mode="reserve",
+)
+attempt = lockout.attempt({"account": account, "ip": ip}, lambda: secret_matches(account, secret))
+```
+
+A failure counts under every limit, even when an earlier one is already spent: under a flood of guesses, the shared per-IP limit must see every one of them. A success resets the limits that reset on success (the default) and leaves the others alone, so one success behind a shared address does not clear everyone's count.
+
+The two modes differ in when the failure is counted:
+
+| | `advisory` (default) | `reserve` (recommended) |
+|---|---|---|
+| Before the verification | Peeks every limit | Counts one failure under every limit. If one denies, gives the others back |
+| Wrong | Counts the failure under every limit | Nothing more: it was counted already |
+| Right | Resets the limits that reset | Resets those, and gives back the failure counted under the others |
+| Verification throws | Counts nothing | Gives everything back |
+| Under concurrency | Attempts that overlap all pass the peek, so the verification can run more than `burst` times | The verification never runs more often than the limits have units |
+
+Use `reserve` for credential checks: an attacker running many guesses in parallel gets no more verifications than the budget allows, whatever the timing. Its cost is a store call more on a success, and a request that a later limit denies holds the earlier limits for one round trip. `advisory` is the default only so that a lockout of earlier versions behaves exactly as before.
+
+When the verification is not a single function, open the gate yourself and settle it once:
+
+```ts
+const gate = await lockout.begin({ account, ip });
+if (!gate.allowed) return deny(gate.decision);   // the verification must not run
+// ... verify ...
+await (ok ? gate.succeed() : gate.fail());       // or gate.cancel() if it could not tell
+```
+
+A denied gate makes no store call whatever you call on it, so a correct guess cannot open a locked gate. The gate settles once, like a pending check: calling the other method afterwards throws a `SettledError`.
+
+### Things to decide
+
+- **The id.** An account id alone lets anyone lock an account out by failing on purpose; an account and address pair lets an attacker spread guesses across accounts. Several limits cover both.
+- **`resetOnSuccess: false`** keeps the failures after a success. Use it when the id is shared, such as an IP behind which many people sign in, so one person's success does not clear everyone's count.
 - **An exception in the verification** counts nothing and reaches you. A database that is down should not lock anyone out.
-- **Overlapping attempts.** A failure is counted after the verification, so attempts that arrive together can all pass the peek first. Under a flood of parallel guesses the verification can run more than `burst` times: each unit freed lets through about the attacker's rate times the time between the peek and the count. A plain limit on all attempts in front of the lockout bounds that.
+- **Overlapping attempts in advisory mode.** A failure is counted after the verification, so attempts that arrive together can all pass the peek first. Under a flood of parallel guesses the verification can run more than `burst` times: each unit freed lets through about the attacker's rate times the time between the peek and the count. Reserve mode does not have this problem.

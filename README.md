@@ -94,7 +94,7 @@ if (!attempt.allowed) return tooManyAttempts(attempt.decision);   // verify did 
 if (!attempt.verified) return wrongPassword();                    // this one was counted
 ```
 
-A success clears the count. If the verification throws, nothing is counted.
+A success clears the count. If the verification throws, nothing is counted. A lockout can also count each failure under several limits, such as per account and per IP, and in `reserve` mode it never runs the verification more often than the limits allow, however many attempts arrive at once: see [recipes](docs/recipes.md#several-limits-and-reserve-mode).
 
 ### Several limits on one request
 

@@ -10,12 +10,14 @@ import inspect
 import threading
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from omnilimit._limiter import AsyncLimiter, Limiter, _store_method
 from omnilimit._types import Decision, Reservation
 
 Mode = Literal["peek", "reserve"]
+LockoutMode = Literal["advisory", "reserve"]
+S = TypeVar("S")
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,16 +105,26 @@ def _validate(recipe: str, entries: Sequence[tuple[Any, ...]], mode: Mode = "pee
         limiter._core.weighed(_cost(entry))
 
 
+@dataclass(frozen=True, slots=True)
+class _Opened:
+    """What opening a combined check found: its own result, what it gave back, what it holds."""
+
+    own: CombinedDecision
+    refunded: list[bool | None]
+    held: list[Reservation | None]
+
+
 class _Settlement:
-    """What both kinds of pending share: the result of opening, and how it was settled."""
+    """What pendings and gates share: the result of opening, and how it was settled."""
 
-    __slots__ = ("_by", "_own", "_refunded", "mode")
+    __slots__ = ("_by", "_own", "_refunded", "_what", "mode")
 
-    def __init__(self, mode: Mode, own: CombinedDecision, refunded: list[bool | None]) -> None:
-        self.mode: Mode = mode
-        self._own = own
-        self._refunded = tuple(refunded)
+    def __init__(self, mode: str, opened: _Opened, what: str) -> None:
+        self.mode = mode
+        self._own = opened.own
+        self._refunded = tuple(opened.refunded)
         self._by: str | None = None
+        self._what = what
 
     @property
     def allowed(self) -> bool:
@@ -134,7 +146,7 @@ class _Settlement:
 
     @property
     def settled(self) -> bool:
-        """True once `commit` or `cancel` was called."""
+        """True once it was settled."""
         return self._by is not None
 
     def _claim(self, op: str) -> bool:
@@ -143,30 +155,17 @@ class _Settlement:
             self._by = op
             return True
         if self._by != op:
-            raise SettledError(f"omnilimit: this pending check was already settled by {self._by}")
+            raise SettledError(f"omnilimit: this {self._what} was already settled by {self._by}")
         return False
 
 
-class Pending(_Settlement):
-    """The first phase of a combined check, from `peek_all` or `reserve_all`.
+class _Sync(_Settlement):
+    """Settlement for blocking code: a lock, so a second thread waits for the first result."""
 
-    Settle it once: `commit()` when the work happened, `cancel()` when it did not. Calling the
-    same one again returns the first result, also from another thread while the first runs;
-    calling the other one raises `SettledError`. See "Combined check" in the spec.
-    """
+    __slots__ = ("_lock", "_result")
 
-    __slots__ = ("_cancel", "_commit", "_lock", "_result")
-
-    def __init__(
-        self,
-        mode: Mode,
-        own: CombinedDecision,
-        refunded: list[bool | None],
-        commit: Callable[[], CombinedDecision],
-        cancel: Callable[[], Cancelled],
-    ) -> None:
-        super().__init__(mode, own, refunded)
-        self._commit, self._cancel = commit, cancel
+    def __init__(self, mode: str, opened: _Opened, what: str) -> None:
+        super().__init__(mode, opened, what)
         self._lock = threading.Lock()
         self._result: Any = None
 
@@ -176,41 +175,14 @@ class Pending(_Settlement):
                 self._result = work()
             return self._result
 
-    def commit(self) -> CombinedDecision:
-        """The work happened.
 
-        In `peek` mode this counts every entry, in order, and stops at the first denial: the
-        entries before it stay counted. In `reserve` mode, and on a denied pending, it makes no
-        store call and returns the pending's own result.
-        """
-        result: CombinedDecision = self._settle("commit", self._commit)
-        return result
+class _Async(_Settlement):
+    """Settlement for event loops: one task, which every caller awaits."""
 
-    def cancel(self) -> Cancelled:
-        """The work did not happen.
+    __slots__ = ("_task",)
 
-        In `reserve` mode this refunds every reservation, in order; otherwise it makes no store
-        call. It never raises for a store failure: a failed refund is `False`.
-        """
-        result: Cancelled = self._settle("cancel", self._cancel)
-        return result
-
-
-class AsyncPending(_Settlement):
-    """`Pending` for `AsyncLimiter`. Concurrent settlements share one task."""
-
-    __slots__ = ("_cancel", "_commit", "_task")
-
-    def __init__(
-        self,
-        mode: Mode,
-        own: CombinedDecision,
-        refunded: list[bool | None],
-        commit: Callable[[], Awaitable[CombinedDecision]],
-        cancel: Callable[[], Awaitable[Cancelled]],
-    ) -> None:
-        super().__init__(mode, own, refunded)
-        self._commit, self._cancel = commit, cancel
+    def __init__(self, mode: str, opened: _Opened, what: str) -> None:
+        super().__init__(mode, opened, what)
         self._task: asyncio.Future[Any] | None = None
 
     async def _settle(self, op: str, work: Callable[[], Awaitable[Any]]) -> Any:
@@ -219,16 +191,6 @@ class AsyncPending(_Settlement):
         task = cast("asyncio.Future[Any]", self._task)
         # Shielded: a caller that gives up does not cancel what the others wait for.
         return await asyncio.shield(task)
-
-    async def commit(self) -> CombinedDecision:
-        """The work happened. See `Pending.commit`."""
-        result: CombinedDecision = await self._settle("commit", self._commit)
-        return result
-
-    async def cancel(self) -> Cancelled:
-        """The work did not happen. See `Pending.cancel`."""
-        result: Cancelled = await self._settle("cancel", self._cancel)
-        return result
 
 
 Entries = Sequence[tuple[Limiter, str] | tuple[Limiter, str, int]]
@@ -269,61 +231,20 @@ async def _refund_each_async(
     ]
 
 
-def _open_peek(recipe: str, entries: Entries) -> Pending:
+def _peek_each(recipe: str, entries: Entries) -> _Opened:
     _validate(recipe, entries)
     own = _peeked([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])
-    nothing: list[bool | None] = [None] * len(own.decisions)
-    return Pending(
-        "peek",
-        own,
-        nothing,
-        lambda: _count_all(entries) if own.allowed else own,
-        lambda: Cancelled(tuple(nothing)),
-    )
+    return _Opened(own, [None] * len(entries), [None] * len(entries))
 
 
-async def _open_peek_async(recipe: str, entries: AsyncEntries) -> AsyncPending:
+async def _peek_each_async(recipe: str, entries: AsyncEntries) -> _Opened:
     _validate(recipe, entries)
     own = _peeked([await entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])
-    nothing: list[bool | None] = [None] * len(own.decisions)
-
-    async def commit() -> CombinedDecision:
-        return await _count_all_async(entries) if own.allowed else own
-
-    async def cancel() -> Cancelled:
-        return Cancelled(tuple(nothing))
-
-    return AsyncPending("peek", own, nothing, commit, cancel)
+    return _Opened(own, [None] * len(entries), [None] * len(entries))
 
 
-def peek_all(entries: Entries) -> Pending:
-    """Open a combined check in `peek` mode: peek every `(limiter, id)` and count nothing.
-
-    `commit()` then counts every limit and `cancel()` leaves them alone. Advisory: two requests
-    racing for the last unit can both pass the peek, and then the second is denied while
-    committing, with the limits before it already counted. A pending never settled counts
-    nothing. Before any store call, raises `ValueError` for an empty list or a cost a limit does
-    not accept, and `TypeError` for a limiter of tier approximate.
-    """
-    return _open_peek("peek_all", entries)
-
-
-async def peek_all_async(entries: AsyncEntries) -> AsyncPending:
-    """`peek_all` for `AsyncLimiter`."""
-    return await _open_peek_async("peek_all", entries)
-
-
-def reserve_all(entries: Entries) -> Pending:
-    """Open a combined check in `reserve` mode: count every `(limiter, id)`, in order.
-
-    It stops at the first denial and refunds the limits counted before it. When allowed,
-    `commit()` keeps the counts and `cancel()` refunds them all. Unlike `peek_all` it never lets
-    more through than the limits allow, at the price of holding the earlier limits for a round
-    trip when a later one denies. A pending never settled stays counted. Before any store call,
-    raises `ValueError` for an empty list or a cost a limit does not accept, and `TypeError` for a
-    limiter whose store cannot refund, such as tier approximate.
-    """
-    _validate("reserve_all", entries, "reserve")
+def _reserve_each(recipe: str, entries: Entries) -> _Opened:
+    _validate(recipe, entries, "reserve")
     decisions: list[Decision] = []
     held: list[Reservation | None] = []
     for entry in entries:
@@ -336,19 +257,12 @@ def reserve_all(entries: Entries) -> Pending:
     if not own.allowed:
         # Give back what was counted before the denial, in entry order. The denial holds nothing.
         refunded = _refund_each(entries, held)
-        return Pending("reserve", own, refunded, lambda: own, lambda: Cancelled(tuple(refunded)))
-    return Pending(
-        "reserve",
-        own,
-        [None] * len(decisions),
-        lambda: own,
-        lambda: Cancelled(tuple(_refund_each(entries, held))),
-    )
+        return _Opened(own, refunded, [None] * len(decisions))
+    return _Opened(own, [None] * len(decisions), held)
 
 
-async def reserve_all_async(entries: AsyncEntries) -> AsyncPending:
-    """`reserve_all` for `AsyncLimiter`."""
-    _validate("reserve_all", entries, "reserve")
+async def _reserve_each_async(recipe: str, entries: AsyncEntries) -> _Opened:
+    _validate(recipe, entries, "reserve")
     decisions: list[Decision] = []
     held: list[Reservation | None] = []
     for entry in entries:
@@ -358,20 +272,128 @@ async def reserve_all_async(entries: AsyncEntries) -> AsyncPending:
         if not reserved.decision.allowed:
             break
     own = _counted(decisions)
-    refunded: list[bool | None] = [None] * len(decisions)
     if not own.allowed:
         # Give back what was counted before the denial, in entry order. The denial holds nothing.
         refunded = await _refund_each_async(entries, held)
+        return _Opened(own, refunded, [None] * len(decisions))
+    return _Opened(own, [None] * len(decisions), held)
 
-    async def commit() -> CombinedDecision:
-        return own
 
-    async def cancel() -> Cancelled:
-        if not own.allowed:
-            return Cancelled(tuple(refunded))
-        return Cancelled(tuple(await _refund_each_async(entries, held)))
+class Pending(_Sync):
+    """The first phase of a combined check, from `peek_all` or `reserve_all`.
 
-    return AsyncPending("reserve", own, refunded, commit, cancel)
+    Settle it once: `commit()` when the work happened, `cancel()` when it did not. Calling the
+    same one again returns the first result, also from another thread while the first runs;
+    calling the other one raises `SettledError`. See "Combined check" in the spec.
+    """
+
+    __slots__ = ("_entries", "_held")
+
+    mode: Mode
+
+    def __init__(self, mode: Mode, entries: Entries, opened: _Opened) -> None:
+        super().__init__(mode, opened, "pending check")
+        self._entries = entries
+        self._held = opened.held
+
+    def commit(self) -> CombinedDecision:
+        """The work happened.
+
+        In `peek` mode this counts every entry, in order, and stops at the first denial: the
+        entries before it stay counted. In `reserve` mode, and on a denied pending, it makes no
+        store call and returns the pending's own result.
+        """
+        own = self._own
+        work = (
+            (lambda: _count_all(self._entries))
+            if self.mode == "peek" and own.allowed
+            else (lambda: own)
+        )
+        result: CombinedDecision = self._settle("commit", work)
+        return result
+
+    def cancel(self) -> Cancelled:
+        """The work did not happen.
+
+        In `reserve` mode this refunds every reservation, in order; otherwise it makes no store
+        call. It never raises for a store failure: a failed refund is `False`.
+        """
+        result: Cancelled = self._settle("cancel", self._cancelled)
+        return result
+
+    def _cancelled(self) -> Cancelled:
+        if not self.allowed:
+            return Cancelled(self.refunded)
+        return Cancelled(tuple(_refund_each(self._entries, self._held)))
+
+
+class AsyncPending(_Async):
+    """`Pending` for `AsyncLimiter`. Concurrent settlements share one task, which starts when
+    the first of them runs."""
+
+    __slots__ = ("_entries", "_held")
+
+    mode: Mode
+
+    def __init__(self, mode: Mode, entries: AsyncEntries, opened: _Opened) -> None:
+        super().__init__(mode, opened, "pending check")
+        self._entries = entries
+        self._held = opened.held
+
+    async def commit(self) -> CombinedDecision:
+        """The work happened. See `Pending.commit`."""
+        result: CombinedDecision = await self._settle("commit", self._committed)
+        return result
+
+    async def cancel(self) -> Cancelled:
+        """The work did not happen. See `Pending.cancel`."""
+        result: Cancelled = await self._settle("cancel", self._cancelled)
+        return result
+
+    async def _committed(self) -> CombinedDecision:
+        if self.mode == "peek" and self.allowed:
+            return await _count_all_async(self._entries)
+        return self._own
+
+    async def _cancelled(self) -> Cancelled:
+        if not self.allowed:
+            return Cancelled(self.refunded)
+        return Cancelled(tuple(await _refund_each_async(self._entries, self._held)))
+
+
+def peek_all(entries: Entries) -> Pending:
+    """Open a combined check in `peek` mode: peek every `(limiter, id)` and count nothing.
+
+    `commit()` then counts every limit and `cancel()` leaves them alone. Advisory: two requests
+    racing for the last unit can both pass the peek, and then the second is denied while
+    committing, with the limits before it already counted. A pending never settled counts
+    nothing. Before any store call, raises `ValueError` for an empty list or a cost a limit does
+    not accept, and `TypeError` for a limiter of tier approximate.
+    """
+    return Pending("peek", entries, _peek_each("peek_all", entries))
+
+
+async def peek_all_async(entries: AsyncEntries) -> AsyncPending:
+    """`peek_all` for `AsyncLimiter`."""
+    return AsyncPending("peek", entries, await _peek_each_async("peek_all", entries))
+
+
+def reserve_all(entries: Entries) -> Pending:
+    """Open a combined check in `reserve` mode: count every `(limiter, id)`, in order.
+
+    It stops at the first denial and refunds the limits counted before it. When allowed,
+    `commit()` keeps the counts and `cancel()` refunds them all. Unlike `peek_all` it never lets
+    more through than the limits allow, at the price of holding the earlier limits for a round
+    trip when a later one denies. A pending never settled stays counted. Before any store call,
+    raises `ValueError` for an empty list or a cost a limit does not accept, and `TypeError` for a
+    limiter whose store cannot refund, such as tier approximate.
+    """
+    return Pending("reserve", entries, _reserve_each("reserve_all", entries))
+
+
+async def reserve_all_async(entries: AsyncEntries) -> AsyncPending:
+    """`reserve_all` for `AsyncLimiter`."""
+    return AsyncPending("reserve", entries, await _reserve_each_async("reserve_all", entries))
 
 
 def check_all(entries: Entries) -> CombinedDecision:
@@ -386,12 +408,28 @@ def check_all(entries: Entries) -> CombinedDecision:
     call, raises `ValueError` for an empty list or a cost a limit does not accept, and
     `TypeError` for a limiter of tier approximate.
     """
-    return _open_peek("check_all", entries).commit()
+    return Pending("peek", entries, _peek_each("check_all", entries)).commit()
 
 
 async def check_all_async(entries: AsyncEntries) -> CombinedDecision:
     """`check_all` for `AsyncLimiter`."""
-    return await (await _open_peek_async("check_all", entries)).commit()
+    opened = await _peek_each_async("check_all", entries)
+    return await AsyncPending("peek", entries, opened).commit()
+
+
+@dataclass(frozen=True, slots=True)
+class Succeeded:
+    """What a gate's `succeed` answers: the gate's own result, with what it reset and refunded.
+
+    `resets` and `refunded` hold one value per limit: `True` done, `False` the store failed, and
+    `None` nothing to do (a limit that does not reset on success, or no reservation to refund).
+    """
+
+    allowed: bool
+    decision: Decision
+    decisions: tuple[Decision, ...]
+    resets: tuple[bool | None, ...]
+    refunded: tuple[bool | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,59 +438,285 @@ class Attempt:
 
     `allowed` is false when there were too many failures: the verification did not run,
     `verified` is `None`, and `decision` is the denial to answer with. Otherwise `verified`
-    says how it went, and after a failure `decision` is the one that counted it.
+    says how it went, and after a failure `decision` is the one that counted it. `decisions` holds
+    every limit's decision, and after a success `resets` says which limits were reset.
     """
 
     allowed: bool
     verified: bool | None
     decision: Decision
+    decisions: tuple[Decision, ...] = ()
+    resets: tuple[bool | None, ...] | None = None
 
 
-class Lockout:
-    """A limit that counts only failed attempts, as a login does.
+@dataclass(frozen=True, slots=True)
+class LockoutLimit(Generic[S]):
+    """One limit of a lockout: its limiter, how to take its id from the subject, and whether a
+    success resets it. `id_of` may be left out only when the subject is a string, its own id."""
 
-    While the budget of failures is spent, even a correct attempt is refused without being
-    checked, which is what makes guessing useless. The limiter's policy is how many failures
-    are tolerated and how fast they come back.
+    limiter: Limiter | AsyncLimiter
+    id_of: Callable[[S], str] | None = None
+    reset_on_success: bool = True
+
+
+def _limits(
+    limiter: Any, reset_on_success: bool, limits: Any, mode: str
+) -> tuple[tuple[LockoutLimit[Any], ...], LockoutMode]:
+    """The limits and mode of either form, checked before any store call."""
+    if (limiter is None) == (limits is None):
+        raise TypeError("omnilimit: a lockout takes a limiter or limits=, not both")
+    if limits is None:
+        return (LockoutLimit(limiter, None, reset_on_success),), "advisory"
+    if len(limits) == 0:
+        raise ValueError("omnilimit: a lockout needs at least one limit")
+    if mode not in ("advisory", "reserve"):
+        raise ValueError("omnilimit: a lockout's mode is 'advisory' or 'reserve'")
+    return tuple(limits), cast("LockoutMode", mode)
+
+
+def _entries_of(limits: tuple[LockoutLimit[Any], ...], subject: Any) -> list[tuple[Any, str]]:
+    entries: list[tuple[Any, str]] = []
+    for limit in limits:
+        if limit.id_of is not None:
+            entries.append((limit.limiter, limit.id_of(subject)))
+        elif isinstance(subject, str):
+            entries.append((limit.limiter, subject))
+        else:
+            raise TypeError("omnilimit: a lockout limit needs id_of when the subject is not a str")
+    return entries
+
+
+class LockoutGate(_Sync):
+    """One attempt in front of a `Lockout`. Run the verification only when `allowed`, then
+    settle it once: `fail()`, `succeed()`, or `cancel()` when the verification could not tell.
+
+    On a denied gate all three make no store call, so a correct guess cannot open a locked gate.
+    Settlement follows the rules of `Pending`. See "Lockout" in the spec.
     """
 
-    def __init__(self, limiter: Limiter, *, reset_on_success: bool = True) -> None:
-        self._limiter = limiter
-        self._reset_on_success = reset_on_success
+    __slots__ = ("_entries", "_held", "_resetting")
 
-    def attempt(self, id_value: str, verify: Callable[[], bool]) -> Attempt:
-        """Run `verify` unless `id_value` has failed too often.
+    mode: LockoutMode
 
-        A false result counts as a failure and a true one clears the count. If `verify` raises,
-        nothing is counted and the error is yours. Raises `TypeError`, before any store call, if
-        the limiter is of tier approximate.
+    def __init__(
+        self, mode: LockoutMode, entries: Entries, resetting: list[bool], opened: _Opened
+    ) -> None:
+        super().__init__(mode, opened, "lockout gate")
+        self._entries, self._resetting, self._held = entries, resetting, opened.held
+
+    def fail(self) -> CombinedDecision:
+        """The verification failed.
+
+        Advisory: counts the failure under every limit, in order, without stopping at a denial.
+        Reserve: the gate already counted it, so no store call.
         """
-        _validate("a lockout", [(self._limiter, id_value)])
-        gate = self._limiter.peek(id_value)
+        result: CombinedDecision = self._settle("fail", self._failed)
+        return result
+
+    def succeed(self) -> Succeeded:
+        """The verification passed: resets the limits that reset on success, and in reserve
+        mode refunds the others. A failed reset or refund is `False` and does not stop the rest."""
+        result: Succeeded = self._settle("succeed", self._succeeded)
+        return result
+
+    def cancel(self) -> Cancelled:
+        """The verification could not tell (it raised): counts nothing, refunds in reserve mode."""
+        result: Cancelled = self._settle("cancel", self._cancelled)
+        return result
+
+    def _failed(self) -> CombinedDecision:
+        if self.mode == "reserve" or not self.allowed:
+            return self._own
+        # The failure happened: every limit records it, whatever an earlier one answers.
+        return _peeked([entry[0].check(entry[1]) for entry in self._entries])
+
+    def _succeeded(self) -> Succeeded:
+        resets: list[bool | None] = [None] * len(self.decisions)
+        refunded: list[bool | None] = [None] * len(self.decisions)
+        if self.allowed:
+            for index, (limiter, id_value, *_) in enumerate(self._entries):
+                if self._resetting[index]:
+                    resets[index] = limiter.reset(id_value)
+                elif self.mode == "reserve":
+                    refunded[index] = _refund_each([self._entries[index]], [self._held[index]])[0]
+        own = self._own
+        return Succeeded(own.allowed, own.decision, own.decisions, tuple(resets), tuple(refunded))
+
+    def _cancelled(self) -> Cancelled:
+        if not self.allowed:
+            return Cancelled(self.refunded)
+        return Cancelled(tuple(_refund_each(self._entries, self._held)))
+
+
+class AsyncLockoutGate(_Async):
+    """`LockoutGate` for `AsyncLockout`."""
+
+    __slots__ = ("_entries", "_held", "_resetting")
+
+    mode: LockoutMode
+
+    def __init__(
+        self, mode: LockoutMode, entries: AsyncEntries, resetting: list[bool], opened: _Opened
+    ) -> None:
+        super().__init__(mode, opened, "lockout gate")
+        self._entries, self._resetting, self._held = entries, resetting, opened.held
+
+    async def fail(self) -> CombinedDecision:
+        """The verification failed. See `LockoutGate.fail`."""
+        result: CombinedDecision = await self._settle("fail", self._failed)
+        return result
+
+    async def succeed(self) -> Succeeded:
+        """The verification passed. See `LockoutGate.succeed`."""
+        result: Succeeded = await self._settle("succeed", self._succeeded)
+        return result
+
+    async def cancel(self) -> Cancelled:
+        """The verification could not tell. See `LockoutGate.cancel`."""
+        result: Cancelled = await self._settle("cancel", self._cancelled)
+        return result
+
+    async def _failed(self) -> CombinedDecision:
+        if self.mode == "reserve" or not self.allowed:
+            return self._own
+        # The failure happened: every limit records it, whatever an earlier one answers.
+        return _peeked([await entry[0].check(entry[1]) for entry in self._entries])
+
+    async def _succeeded(self) -> Succeeded:
+        resets: list[bool | None] = [None] * len(self.decisions)
+        refunded: list[bool | None] = [None] * len(self.decisions)
+        if self.allowed:
+            for index, (limiter, id_value, *_) in enumerate(self._entries):
+                if self._resetting[index]:
+                    resets[index] = await limiter.reset(id_value)
+                elif self.mode == "reserve":
+                    given = await _refund_each_async([self._entries[index]], [self._held[index]])
+                    refunded[index] = given[0]
+        own = self._own
+        return Succeeded(own.allowed, own.decision, own.decisions, tuple(resets), tuple(refunded))
+
+    async def _cancelled(self) -> Cancelled:
+        if not self.allowed:
+            return Cancelled(self.refunded)
+        return Cancelled(tuple(await _refund_each_async(self._entries, self._held)))
+
+
+def _attempt_denied(gate: _Settlement) -> Attempt:
+    return Attempt(allowed=False, verified=None, decision=gate.decision, decisions=gate.decisions)
+
+
+class Lockout(Generic[S]):
+    """A limit that counts only failed attempts, as a sign-in does.
+
+    While the budget of failures is spent, even a correct attempt is refused without being
+    checked, which is what makes guessing useless. `Lockout(limiter)` is the advisory one-limit
+    lockout of earlier versions, with the id as subject. `Lockout(limits=[...], mode=...)` counts
+    each failure under every limit, such as per subject and per IP, each with the id its `id_of`
+    takes from the subject. `mode="reserve"` counts before the verification and gives back on
+    success, so no more verifications run than the limits allow: prefer it for credential checks.
+    """
+
+    @overload
+    def __init__(
+        self: Lockout[str], limiter: Limiter, *, reset_on_success: bool = True
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self, *, limits: Sequence[LockoutLimit[S]], mode: LockoutMode = "advisory"
+    ) -> None: ...
+
+    def __init__(
+        self,
+        limiter: Limiter | None = None,
+        *,
+        reset_on_success: bool = True,
+        limits: Sequence[LockoutLimit[S]] | None = None,
+        mode: LockoutMode = "advisory",
+    ) -> None:
+        self._limits, self._mode = _limits(limiter, reset_on_success, limits, mode)
+
+    def begin(self, subject: S) -> LockoutGate:
+        """Open a gate for `subject`. Raises `TypeError`, before any store call, if a limiter is
+        of tier approximate, cannot refund in reserve mode, or has no `id_of` for a subject that is
+        not a str."""
+        entries = _entries_of(self._limits, subject)
+        if self._mode == "reserve":
+            opened = _reserve_each("a lockout", entries)
+        else:
+            opened = _peek_each("a lockout", entries)
+        resetting = [limit.reset_on_success for limit in self._limits]
+        return LockoutGate(self._mode, entries, resetting, opened)
+
+    def attempt(self, subject: S, verify: Callable[[], bool]) -> Attempt:
+        """Run `verify` unless `subject` has failed too often.
+
+        A false result counts as a failure and a true one clears the limits that reset on
+        success. If `verify` raises, nothing is counted and the error is yours. Raises as
+        `begin` does.
+        """
+        gate = self.begin(subject)
         if not gate.allowed:
-            return Attempt(allowed=False, verified=None, decision=gate)
-        if verify():
-            if self._reset_on_success:
-                self._limiter.reset(id_value)
-            return Attempt(allowed=True, verified=True, decision=gate)
-        return Attempt(allowed=True, verified=False, decision=self._limiter.check(id_value))
+            return _attempt_denied(gate)
+        try:
+            verified = verify()
+        except BaseException:
+            # Nothing is counted for an attempt that could not tell.
+            gate.cancel()
+            raise
+        if verified:
+            done = gate.succeed()
+            return Attempt(True, True, done.decision, done.decisions, done.resets)
+        failed = gate.fail()
+        return Attempt(True, False, failed.decision, failed.decisions)
 
 
-class AsyncLockout:
+class AsyncLockout(Generic[S]):
     """`Lockout` for `AsyncLimiter`. `verify` may be a plain function or a coroutine function."""
 
-    def __init__(self, limiter: AsyncLimiter, *, reset_on_success: bool = True) -> None:
-        self._limiter = limiter
-        self._reset_on_success = reset_on_success
+    @overload
+    def __init__(
+        self: AsyncLockout[str], limiter: AsyncLimiter, *, reset_on_success: bool = True
+    ) -> None: ...
 
-    async def attempt(self, id_value: str, verify: Callable[[], Awaitable[bool] | bool]) -> Attempt:
-        _validate("a lockout", [(self._limiter, id_value)])
-        gate = await self._limiter.peek(id_value)
+    @overload
+    def __init__(
+        self, *, limits: Sequence[LockoutLimit[S]], mode: LockoutMode = "advisory"
+    ) -> None: ...
+
+    def __init__(
+        self,
+        limiter: AsyncLimiter | None = None,
+        *,
+        reset_on_success: bool = True,
+        limits: Sequence[LockoutLimit[S]] | None = None,
+        mode: LockoutMode = "advisory",
+    ) -> None:
+        self._limits, self._mode = _limits(limiter, reset_on_success, limits, mode)
+
+    async def begin(self, subject: S) -> AsyncLockoutGate:
+        """Open a gate for `subject`. See `Lockout.begin`."""
+        entries = _entries_of(self._limits, subject)
+        if self._mode == "reserve":
+            opened = await _reserve_each_async("a lockout", entries)
+        else:
+            opened = await _peek_each_async("a lockout", entries)
+        resetting = [limit.reset_on_success for limit in self._limits]
+        return AsyncLockoutGate(self._mode, entries, resetting, opened)
+
+    async def attempt(self, subject: S, verify: Callable[[], Awaitable[bool] | bool]) -> Attempt:
+        """Run `verify` unless `subject` has failed too often. See `Lockout.attempt`."""
+        gate = await self.begin(subject)
         if not gate.allowed:
-            return Attempt(allowed=False, verified=None, decision=gate)
-        result = verify()
-        if await result if inspect.isawaitable(result) else result:
-            if self._reset_on_success:
-                await self._limiter.reset(id_value)
-            return Attempt(allowed=True, verified=True, decision=gate)
-        return Attempt(allowed=True, verified=False, decision=await self._limiter.check(id_value))
+            return _attempt_denied(gate)
+        try:
+            result = verify()
+            verified = await result if inspect.isawaitable(result) else result
+        except BaseException:
+            await gate.cancel()
+            raise
+        if verified:
+            done = await gate.succeed()
+            return Attempt(True, True, done.decision, done.decisions, done.resets)
+        failed = await gate.fail()
+        return Attempt(True, False, failed.decision, failed.decisions)
