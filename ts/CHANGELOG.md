@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.3.1...ts-v0.4.0) (2026-11-20)
+
+
+### Features
+
+* multi-limit lockout ([#28](https://github.com/PabloAlaniz/omnilimit/issues/28)) ([cbd7b07](https://github.com/PabloAlaniz/omnilimit/commit/cbd7b077b2a95e1940798f15b2d97ea043f38706))
+* refund a reserved hit ([#25](https://github.com/PabloAlaniz/omnilimit/issues/25)) ([e8be94e](https://github.com/PabloAlaniz/omnilimit/commit/e8be94ee5885d022c6fcf587672eef1c7ced46ca))
+* two-phase combined checks ([#27](https://github.com/PabloAlaniz/omnilimit/issues/27)) ([d854019](https://github.com/PabloAlaniz/omnilimit/commit/d8540190940103cb331476b7c0589003a85dc07a))
+
 ## [0.3.1](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.3.0...ts-v0.3.1) (2026-11-18)
 
 
