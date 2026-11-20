@@ -1,0 +1,599 @@
+{
+ "spec": "1",
+ "id": "recipe/random-020",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "a": {
+   "scope": "a",
+   "policy": {
+    "limit": 3,
+    "window_ms": 60000,
+    "burst": 4
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "lockouts": {
+  "login": [
+   {
+    "limiter": "a"
+   }
+  ]
+ },
+ "timeline": [
+  {
+   "op": "fault",
+   "limiter": "a",
+   "fault": "error",
+   "on": [
+    "peek",
+    "hit",
+    "reset"
+   ]
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000001139,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000002139,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "y",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "y"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000002472,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 4
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000002489,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "y"
+    },
+    {
+     "limiter": "a",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000007489,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "y",
+     "cost": 4
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000007506,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "y"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000012506,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000013506,
+   "lockout": "login",
+   "ids": [
+    "u"
+   ],
+   "verify": "raise",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "verified": null,
+     "verify_ran": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000018506,
+   "lockout": "login",
+   "ids": [
+    "u"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "verified": null,
+     "verify_ran": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "a",
+   "id": "y",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "y",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "reason": "store_error",
+     "status": 503,
+     "remaining": null,
+     "reset_ms": null,
+     "retry_after_ms": 1000
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000019506,
+   "lockout": "login",
+   "ids": [
+    "v"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "verified": null,
+     "verify_ran": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "peek",
+   "at_ms": 1700000020506,
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "reason": "store_error",
+     "status": 503,
+     "remaining": null,
+     "reset_ms": null,
+     "retry_after_ms": 1000
+    }
+   }
+  },
+  {
+   "op": "reset",
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": false
+   }
+  }
+ ]
+}

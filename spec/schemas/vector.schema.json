@@ -7,7 +7,7 @@
   "properties": {
     "spec": { "const": "1" },
     "id": { "type": "string", "minLength": 1 },
-    "kind": { "enum": ["sequence", "key", "ip", "failure", "concurrency", "contract"] }
+    "kind": { "enum": ["sequence", "key", "ip", "failure", "concurrency", "contract", "recipe"] }
   },
   "allOf": [
     {
@@ -104,9 +104,146 @@
     {
       "if": { "properties": { "kind": { "const": "contract" } } },
       "then": { "required": ["subject", "cases"], "properties": { "subject": { "enum": ["policy", "scope", "cost", "shorthand", "approximate"] } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "recipe" } } },
+      "then": {
+        "required": ["tiers", "salt", "limiters", "timeline"],
+        "properties": {
+          "tiers": { "type": "array", "items": { "enum": ["exact", "local"] } },
+          "salt": { "type": "string" },
+          "limiters": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "object",
+              "required": ["scope", "policy", "on_store_error"],
+              "additionalProperties": false,
+              "properties": {
+                "scope": { "type": "string" },
+                "policy": { "$ref": "#/definitions/policy" },
+                "on_store_error": { "enum": ["open", "closed"] },
+                "tier": { "const": "approximate", "description": "Absent means the store under test." }
+              }
+            }
+          },
+          "lockouts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["limiter"],
+                "additionalProperties": false,
+                "properties": {
+                  "limiter": { "type": "string" },
+                  "reset_on_success": { "type": "boolean", "description": "Absent means true." }
+                }
+              }
+            }
+          },
+          "timeline": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/recipe_step" } }
+        }
+      }
     }
   ],
   "definitions": {
+    "short_decision": {
+      "type": "object",
+      "required": ["allowed", "reason", "status", "remaining", "reset_ms", "retry_after_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "allowed": { "type": "boolean" },
+        "reason": { "enum": ["ok", "limited", "store_error"] },
+        "status": { "enum": [null, 429, 503] },
+        "remaining": { "type": ["integer", "null"] },
+        "reset_ms": { "type": ["integer", "null"] },
+        "retry_after_ms": { "type": ["integer", "null"] }
+      }
+    },
+    "recipe_step": {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": { "enum": ["check_all", "attempt", "check", "peek", "reset", "inspect", "fault", "heal"] },
+        "at_ms": { "type": "integer", "description": "Passed to store calls as now, for this step and the ones after it." },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["limiter", "id"],
+            "additionalProperties": false,
+            "properties": {
+              "limiter": { "type": "string" },
+              "id": { "type": "string" },
+              "cost": { "description": "Absent means 1. May be invalid on purpose." }
+            }
+          }
+        },
+        "lockout": { "type": "string" },
+        "ids": { "type": "array", "items": { "type": "string" }, "description": "One id per limit of the lockout." },
+        "verify": { "enum": [true, false, "raise"] },
+        "limiter": { "type": "string" },
+        "id": { "type": "string" },
+        "cost": { "type": "integer" },
+        "fault": { "enum": ["error", "timeout"] },
+        "on": { "type": "array", "minItems": 1, "items": { "enum": ["peek", "hit", "reset"] } },
+        "expect": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "calls": {
+              "type": "array",
+              "description": "Every store call of the step, in order.",
+              "items": {
+                "type": "object",
+                "required": ["op", "limiter", "id"],
+                "additionalProperties": false,
+                "properties": {
+                  "op": { "enum": ["peek", "hit", "reset"] },
+                  "limiter": { "type": "string" },
+                  "id": { "type": "string" },
+                  "failed": { "const": true }
+                }
+              }
+            },
+            "result": {
+              "oneOf": [
+                { "type": "boolean", "description": "reset" },
+                { "$ref": "#/definitions/short_decision" },
+                {
+                  "type": "object",
+                  "required": ["allowed", "governing", "decisions"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "allowed": { "type": "boolean" },
+                    "governing": { "type": "integer", "minimum": 0 },
+                    "decisions": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/short_decision" } },
+                    "verified": { "type": ["boolean", "null"] },
+                    "verify_ran": { "type": "boolean" }
+                  }
+                }
+              ]
+            },
+            "error": { "enum": ["value", "type", "state", "verify"], "description": "state is reserved." },
+            "state": {
+              "type": "object",
+              "required": ["level", "ts"],
+              "properties": { "level": { "type": "integer" }, "ts": { "type": "integer" } }
+            }
+          }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "op": { "const": "check_all" } } }, "then": { "required": ["entries", "expect"] } },
+        { "if": { "properties": { "op": { "const": "attempt" } } }, "then": { "required": ["lockout", "ids", "verify", "expect"] } },
+        { "if": { "properties": { "op": { "enum": ["check", "peek", "reset"] } } }, "then": { "required": ["limiter", "id", "expect"] } },
+        { "if": { "properties": { "op": { "const": "inspect" } } }, "then": { "required": ["limiter", "id", "expect"] } },
+        { "if": { "properties": { "op": { "const": "fault" } } }, "then": { "required": ["limiter", "fault", "on"], "not": { "required": ["expect"] } } },
+        { "if": { "properties": { "op": { "const": "heal" } } }, "then": { "required": ["limiter"], "not": { "required": ["expect"] } } }
+      ]
+    },
     "policy": {
       "type": "object",
       "required": ["limit", "window_ms", "burst"],

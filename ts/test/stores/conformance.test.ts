@@ -8,10 +8,11 @@ import { createLimiter } from '../../src/core/limiter.js';
 import { fromRowQuery, MIGRATION_SQL, postgresStore } from '../../src/stores/postgres.js';
 import { fromIoredis, fromNodeRedis, redisStore } from '../../src/stores/redis.js';
 import type { Store } from '../../src/core/types.js';
-import { runConcurrency, runSequence, vectorsOf, type Vector } from '../support/vectors.js';
+import { runConcurrency, runRecipe, runSequence, vectorsOf, type Vector } from '../support/vectors.js';
 
 const sequences = vectorsOf('sequence').filter((v) => v.tiers.includes('exact'));
 const concurrency = vectorsOf('concurrency');
+const recipes = vectorsOf('recipe').filter((v) => v.tiers.includes('exact'));
 const redisUrls = (process.env['OMNILIMIT_TEST_REDIS_URLS'] ?? '').split(',').filter(Boolean);
 const postgresUrls = (process.env['OMNILIMIT_TEST_POSTGRES_URLS'] ?? '').split(',').filter(Boolean);
 
@@ -27,6 +28,10 @@ function suite(name: string, getStore: () => Store): void {
 
     it.each(concurrency.map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
       await runConcurrency(vector, getStore(), `:${randomUUID()}`);
+    });
+
+    it.each(recipes.map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
+      await runRecipe(vector, getStore(), `:${randomUUID()}`);
     });
 
     // Vectors inject the time, so they never reach the clock branch of each script.

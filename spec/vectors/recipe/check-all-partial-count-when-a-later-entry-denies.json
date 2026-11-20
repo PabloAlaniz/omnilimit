@@ -1,0 +1,166 @@
+{
+ "spec": "1",
+ "id": "recipe/check-all-partial-count-when-a-later-entry-denies",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 3,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  },
+  "user": {
+   "scope": "user",
+   "policy": {
+    "limit": 3,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  },
+  "last": {
+   "scope": "last",
+   "policy": {
+    "limit": 3,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "check_all",
+   "at_ms": 1700000000000,
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "user",
+     "id": "u"
+    },
+    {
+     "limiter": "ip",
+     "id": "a",
+     "cost": 3
+    },
+    {
+     "limiter": "last",
+     "id": "z"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "peek",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "peek",
+      "limiter": "last",
+      "id": "z"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 2,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 20000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 20000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 2,
+       "reset_ms": 20000,
+       "retry_after_ms": 20000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 60000,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "user",
+   "id": "u",
+   "expect": {
+    "state": {
+     "level": 60000,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "last",
+   "id": "z",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  }
+ ]
+}

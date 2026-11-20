@@ -1,0 +1,277 @@
+{
+ "spec": "1",
+ "id": "recipe/null-remaining-never-governs",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "down": {
+   "scope": "down",
+   "policy": {
+    "limit": 3,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "open"
+  },
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "fault",
+   "limiter": "down",
+   "fault": "error",
+   "on": [
+    "peek",
+    "hit"
+   ]
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000000000,
+   "entries": [
+    {
+     "limiter": "down",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 30000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "down",
+     "id": "x"
+    },
+    {
+     "limiter": "down",
+     "id": "y"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "down",
+      "id": "y",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "down",
+      "id": "y",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "down",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "peek",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "down",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "peek",
+      "limiter": "down",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 30000
+      },
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

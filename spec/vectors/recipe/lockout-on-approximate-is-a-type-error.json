@@ -1,0 +1,44 @@
+{
+ "spec": "1",
+ "id": "recipe/lockout-on-approximate-is-a-type-error",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "edge": {
+   "scope": "edge",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "open",
+   "tier": "approximate"
+  }
+ },
+ "lockouts": {
+  "edge-login": [
+   {
+    "limiter": "edge"
+   }
+  ]
+ },
+ "timeline": [
+  {
+   "op": "attempt",
+   "at_ms": 1700000000000,
+   "lockout": "edge-login",
+   "ids": [
+    "u"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [],
+    "error": "type"
+   }
+  }
+ ]
+}

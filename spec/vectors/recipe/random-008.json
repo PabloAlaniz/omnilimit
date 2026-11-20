@@ -1,0 +1,739 @@
+{
+ "spec": "1",
+ "id": "recipe/random-008",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "a": {
+   "scope": "a",
+   "policy": {
+    "limit": 2,
+    "window_ms": 1009,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "lockouts": {
+  "login": [
+   {
+    "limiter": "a"
+   }
+  ]
+ },
+ "timeline": [
+  {
+   "op": "attempt",
+   "at_ms": 1700000000177,
+   "lockout": "login",
+   "ids": [
+    "v"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "v"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 3,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x"
+    },
+    {
+     "limiter": "a",
+     "id": "y",
+     "cost": 3
+    },
+    {
+     "limiter": "a",
+     "id": "y",
+     "cost": 2
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "y"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 2,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 505,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 1514,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 1514,
+       "retry_after_ms": 1009
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "at_ms": 1700000000194,
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "state": {
+     "level": 975,
+     "ts": 1700000000177
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "u"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 505,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000000527,
+   "lockout": "login",
+   "ids": [
+    "u"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "u"
+     },
+     {
+      "op": "reset",
+      "limiter": "a",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 172,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "at_ms": 1700000000860,
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000177
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 2,
+     "reset_ms": 505,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 1009,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000000861,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 3
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 3
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 3
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 1,
+       "reset_ms": 1008,
+       "retry_after_ms": 1008
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 1,
+       "reset_ms": 1008,
+       "retry_after_ms": 1008
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 1,
+       "reset_ms": 1008,
+       "retry_after_ms": 1008
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000005861,
+   "lockout": "login",
+   "ids": [
+    "v"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "v"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 505,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000010861,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 3
+    },
+    {
+     "limiter": "a",
+     "id": "y"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "y"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 1514,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 505,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "at_ms": 1700000010878,
+   "limiter": "a",
+   "id": "x",
+   "expect": {
+    "state": {
+     "level": 2993,
+     "ts": 1700000010861
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "v"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "v"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "v"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 505,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "y"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "hit",
+      "limiter": "a",
+      "id": "y"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 992,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000010895,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "y"
+    },
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 1480,
+       "retry_after_ms": 975
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 975,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 1480,
+       "retry_after_ms": 975
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    },
+    {
+     "limiter": "a",
+     "id": "y"
+    },
+    {
+     "limiter": "a",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "y"
+     },
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 1480,
+       "retry_after_ms": 975
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 975,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 1480,
+       "retry_after_ms": 471
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000011228,
+   "entries": [
+    {
+     "limiter": "a",
+     "id": "x",
+     "cost": 2
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "a",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 1147,
+       "retry_after_ms": 642
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

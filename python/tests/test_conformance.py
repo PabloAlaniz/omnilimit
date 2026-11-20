@@ -15,6 +15,8 @@ from support import (
     policy_of,
     run_concurrency,
     run_concurrency_async,
+    run_recipe,
+    run_recipe_async,
     run_sequence,
     run_sequence_async,
     vectors_of,
@@ -32,8 +34,9 @@ def _by_id(kind: str) -> Any:
 
 def test_vectors_cover_every_kind() -> None:
     kinds = sorted({vector["kind"] for vector in ALL_VECTORS})
-    assert kinds == ["concurrency", "contract", "failure", "ip", "key", "sequence"]
+    assert kinds == ["concurrency", "contract", "failure", "ip", "key", "recipe", "sequence"]
     assert len(vectors_of("sequence")) >= 50
+    assert len(vectors_of("recipe")) >= 30
 
 
 def test_vectors_match_the_schema() -> None:
@@ -56,6 +59,16 @@ def test_sequence_on_memory(vector: dict[str, Any]) -> None:
 @_by_id("sequence")
 def test_sequence_on_memory_async(vector: dict[str, Any]) -> None:
     asyncio.run(run_sequence_async(vector, MemoryStore()))
+
+
+@_by_id("recipe")
+def test_recipe_on_memory(vector: dict[str, Any]) -> None:
+    run_recipe(vector, MemoryStore())
+
+
+@_by_id("recipe")
+def test_recipe_on_memory_async(vector: dict[str, Any]) -> None:
+    asyncio.run(run_recipe_async(vector, MemoryStore()))
 
 
 @_by_id("concurrency")

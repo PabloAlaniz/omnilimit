@@ -7,7 +7,7 @@ Two compositions of `check`, `peek` and `reset` come up often enough to ship wit
 | Several limits on one request | `checkAll(entries)` | `check_all(entries)`, `check_all_async(entries)` |
 | Count only failures | `createLockout({ limiter })` | `Lockout(limiter)`, `AsyncLockout(limiter)` |
 
-Both need stores that can peek, so not the `approximate` tier.
+Both need stores that can peek, so not the `approximate` tier. Every entry is checked before the first store call: an empty list, a cost a limit does not accept or an `approximate` limiter raises an error and touches no store. Both are tested by the shared `recipe` vectors, down to the order of every store call.
 
 ## Several limits on one request
 
@@ -71,3 +71,4 @@ Things to decide:
 - **The id.** `email` alone lets anyone lock an account out by failing on purpose. `email:ip` avoids that but lets an attacker spread guesses across addresses. Many sites use both, one lockout each.
 - **`resetOnSuccess: false`** keeps the failures after a success. Use it when the id is shared, such as an IP behind which many people log in, so one person's success does not clear everyone's count.
 - **An exception in the verification** counts nothing and reaches you. A database that is down should not lock anyone out.
+- **Overlapping attempts.** A failure is counted after the verification, so attempts that arrive together can all pass the peek first. Under a flood of parallel guesses the verification can run more than `burst` times: each unit freed lets through about the attacker's rate times the time between the peek and the count. A plain limit on all attempts in front of the lockout bounds that.

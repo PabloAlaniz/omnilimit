@@ -1,0 +1,159 @@
+{
+ "spec": "1",
+ "id": "recipe/cost-validated-before-any-store-call",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 10,
+    "window_ms": 60000,
+    "burst": 4
+   },
+   "on_store_error": "closed"
+  },
+  "user": {
+   "scope": "user",
+   "policy": {
+    "limit": 5,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "check_all",
+   "at_ms": 1700000000000,
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "user",
+     "id": "u",
+     "cost": 6
+    }
+   ],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "user",
+     "id": "u",
+     "cost": 0
+    }
+   ],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a",
+     "cost": 5
+    },
+    {
+     "limiter": "user",
+     "id": "u"
+    }
+   ],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a",
+     "cost": 4
+    },
+    {
+     "limiter": "user",
+     "id": "u",
+     "cost": 5
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "peek",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 24000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 240000,
+     "ts": 1700000000000
+    }
+   }
+  }
+ ]
+}

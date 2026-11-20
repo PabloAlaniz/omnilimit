@@ -1,0 +1,69 @@
+{
+ "spec": "1",
+ "id": "recipe/empty-list-is-a-value-error",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "check_all",
+   "at_ms": 1700000000000,
+   "entries": [],
+   "expect": {
+    "calls": [],
+    "error": "value"
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 1000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

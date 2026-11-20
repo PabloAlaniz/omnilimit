@@ -1,0 +1,409 @@
+{
+ "spec": "1",
+ "id": "recipe/open-and-closed-failures",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "open": {
+   "scope": "open",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "open"
+  },
+  "closed": {
+   "scope": "closed",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "closed"
+  },
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 1,
+    "window_ms": 1000,
+    "burst": 1
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "check",
+   "at_ms": 1700000000000,
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 1000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "fault",
+   "limiter": "open",
+   "fault": "error",
+   "on": [
+    "peek",
+    "hit",
+    "reset"
+   ]
+  },
+  {
+   "op": "fault",
+   "limiter": "closed",
+   "fault": "error",
+   "on": [
+    "peek"
+   ]
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000000001,
+   "entries": [
+    {
+     "limiter": "open",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 999,
+       "retry_after_ms": 999
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "closed",
+     "id": "x"
+    },
+    {
+     "limiter": "open",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      },
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 999,
+       "retry_after_ms": 999
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "ip",
+     "id": "a"
+    },
+    {
+     "limiter": "closed",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 999,
+       "retry_after_ms": 999
+      },
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000001000,
+   "entries": [
+    {
+     "limiter": "open",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 1000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "heal",
+   "limiter": "closed"
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "closed",
+     "id": "x"
+    },
+    {
+     "limiter": "open",
+     "id": "x"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "x"
+     },
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "x"
+     },
+     {
+      "op": "hit",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 30000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "reset",
+   "limiter": "open",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "reset",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": false
+   }
+  },
+  {
+   "op": "reset",
+   "limiter": "closed",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "reset",
+      "limiter": "closed",
+      "id": "x"
+     }
+    ],
+    "result": true
+   }
+  }
+ ]
+}

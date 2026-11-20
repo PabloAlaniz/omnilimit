@@ -57,6 +57,71 @@ CORE = [
         "            self._limiter.check(id_value)",
     ),
     (
+        "check_all stops peeking at the first denial",
+        "_recipes.py",
+        "refusal = _refusal([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
+        "peeks = []\n"
+        "    for entry in entries:\n"
+        "        peeks.append(entry[0].peek(entry[1], cost=_cost(entry)))\n"
+        "        if not peeks[-1].allowed:\n"
+        "            break\n"
+        "    refusal = _refusal(peeks)",
+    ),
+    (
+        "check_all denial tie picks the last",
+        "_recipes.py",
+        "if (decision.retry_after_ms or 0) > (governing.retry_after_ms or 0):",
+        "if (decision.retry_after_ms or 0) >= (governing.retry_after_ms or 0):",
+    ),
+    (
+        "check_all remaining tie picks the last",
+        "_recipes.py",
+        "decision.remaining < governing.remaining",
+        "decision.remaining <= governing.remaining",
+    ),
+    (
+        "check_all lets a null remaining govern",
+        "_recipes.py",
+        "        if decision.remaining is None:\n            continue\n",
+        "        if decision.remaining is None:\n            governing = decision\n            continue\n",
+    ),
+    (
+        "check_all keeps counting after a denial",
+        "_recipes.py",
+        "        decision = entry[0].check(entry[1], cost=_cost(entry))\n"
+        "        decisions.append(decision)\n"
+        "        if not decision.allowed:\n"
+        "            return CombinedDecision(allowed=False, decision=decision, decisions=tuple(decisions))",
+        "        decision = entry[0].check(entry[1], cost=_cost(entry))\n"
+        "        decisions.append(decision)\n"
+        "    for decision in decisions:\n"
+        "        if not decision.allowed:\n"
+        "            return CombinedDecision(allowed=False, decision=decision, decisions=tuple(decisions))",
+    ),
+    (
+        "recipes validate costs lazily",
+        "_recipes.py",
+        "        limiter._core.weighed(_cost(entry))\n",
+        "",
+    ),
+    (
+        "recipes notice approximate stores at their peek",
+        "_recipes.py",
+        'if limiter.tier == "approximate":',
+        'if limiter.tier == "approximate" and False:',
+    ),
+    (
+        "lockout counts a failure when verify raises",
+        "_recipes.py",
+        "        if verify():",
+        "        try:\n"
+        "            verified = verify()\n"
+        "        except Exception:\n"
+        "            self._limiter.check(id_value)\n"
+        "            raise\n"
+        "        if verified:",
+    ),
+    (
         "shorthand accepts plurals",
         "_gcra.py",
         '(second|minute|hour|day)")',
