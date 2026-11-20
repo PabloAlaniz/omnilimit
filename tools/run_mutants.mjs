@@ -43,8 +43,19 @@ const core = [
   ['peek reports the level after a hit', 'ts/src/core/gcra.ts', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained + params.windowMs, ts };'],
   ['peek uses the request clock as ts', 'ts/src/core/gcra.ts', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts };', 'return { allowed: drained + params.windowMs <= params.capacity, level: drained, ts: t };'],
   ['memory peek consumes quota', 'ts/src/stores/memory.ts', 'return applyPeek(entries.get(key) ?? null, params, nowMs ?? clock());', 'const r = applyHit(entries.get(key) ?? null, params, nowMs ?? clock()); if (r.write) entries.set(key, { ...r.write, expiresAt: 0 }); return applyPeek(entries.get(key) ?? null, params, nowMs ?? clock());'],
-  ['memory reset does not delete', 'ts/src/stores/memory.ts', '      entries.delete(key);\n    },\n  };', '      void key;\n    },\n  };'],
+  ['memory reset does not delete', 'ts/src/stores/memory.ts', '      entries.delete(key);\n    },\n    async refund', '      void key;\n    },\n    async refund'],
   ['peek counts like check', 'ts/src/core/limiter.ts', "return decide('peek', params.windowMs, () => peekFn(key, params, peekOptions?.nowMs));", "return decide('peek', params.windowMs, () => store.hit(key, params, peekOptions?.nowMs));"],
+  ['refund gives the whole cost whatever the drain', 'ts/src/core/gcra.ts', 'Math.max(0, params.windowMs - Math.min(t - sinceMs, params.drainMs) * params.limit)', 'params.windowMs'],
+  ['refund goes below zero', 'ts/src/core/gcra.ts', 'const level = Math.max(0, drained - give);', 'const level = drained - give;'],
+  ['refund drains from now instead of since', 'ts/src/core/gcra.ts', 'Math.min(t - sinceMs, params.drainMs)', 'Math.min(t - nowMs, params.drainMs)'],
+  ['refund of a reservation older than the bucket gives', 'ts/src/core/gcra.ts', 'const give = t < sinceMs ? 0 :', 'const give ='],
+  ['refund does not drain the bucket first', 'ts/src/core/gcra.ts', 'const drained = Math.max(0, state.level - Math.min(t - state.ts, params.drainMs) * params.limit);', 'const drained = state.level;'],
+  ['refund that gives nothing writes', 'ts/src/core/gcra.ts', 'if (drained === 0 || give === 0) return { refund: { level: drained, ts: state.ts }, write: null };', ''],
+  ['refund on a missing bucket creates it', 'ts/src/core/gcra.ts', 'if (!state) return { refund: { level: 0, ts: nowMs }, write: null };', 'if (!state) return { refund: { level: 0, ts: nowMs }, write: { level: 0, ts: nowMs } };'],
+  ['refund allowed twice', 'ts/src/core/limiter.ts', '      if (state.spent) return false;\n', ''],
+  ['failed refund reports success', 'ts/src/core/limiter.ts', "        emit({ type: 'store_error', op: 'refund', scope, tier: store.tier, error });\n        return false;", "        emit({ type: 'store_error', op: 'refund', scope, tier: store.tier, error });\n        return true;"],
+  ['a denial is a reservation', 'ts/src/core/limiter.ts', 'if (!hit?.allowed || hit.ts === null) return { decision, reservation: null };', 'if (!hit || hit.ts === null) return { decision, reservation: null };'],
+  ['memory refund does not write', 'ts/src/stores/memory.ts', 'if (write) entries.set(key, { ...write, expiresAt: write.ts + params.drainMs });', 'void write;'],
   ['failed reset reports success', 'ts/src/core/limiter.ts', "        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });\n        return false;", "        emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });\n        return true;"],
 ];
 
@@ -57,6 +68,12 @@ const scripts = [
   ['lua peek: does not drain', 'spec/scripts/redis/peek.lua', 'local drained = math.max(0, level - math.min(t - ts, drain_ms) * limit)', 'local drained = level'],
   ['lua peek: capacity check is off by one', 'spec/scripts/redis/peek.lua', 'if drained + window_ms <= capacity then', 'if drained + window_ms < capacity then'],
   ['sql peek: missing row reports ts 0', 'spec/scripts/postgres/002_peek.sql', '    v_ts := v_now;', '    v_ts := 0;'],
+  ['lua refund: does not drain the bucket first', 'spec/scripts/redis/refund.lua', 'local drained = math.max(0, level - math.min(t - ts, drain_ms) * limit)', 'local drained = level'],
+  ['lua refund: gives the whole cost', 'spec/scripts/redis/refund.lua', '  give = math.max(0, window_ms - math.min(t - since, drain_ms) * limit)', '  give = window_ms'],
+  ['lua refund: goes below zero', 'spec/scripts/redis/refund.lua', 'local new_level = math.max(0, drained - give)', 'local new_level = drained - give'],
+  ['sql refund: gives the whole cost', 'spec/scripts/postgres/003_refund.sql', '    v_give := GREATEST(0, p_window_ms - LEAST(v_t - p_since_ms, p_drain_ms) * p_limit);', '    v_give := p_window_ms;'],
+  ['sql refund: writes when it gives nothing', 'spec/scripts/postgres/003_refund.sql', '  IF v_drained = 0 OR v_give = 0 THEN', '  IF false THEN'],
+  ['sql refund: drains from now instead of since', 'spec/scripts/postgres/003_refund.sql', 'LEAST(v_t - p_since_ms, p_drain_ms)', 'LEAST(v_t - v_now, p_drain_ms)'],
   ['sql peek: writes a placeholder row', 'spec/scripts/postgres/002_peek.sql', 'BEGIN\n  SELECT s.level', "BEGIN\n  INSERT INTO omnilimit_state (key, level, ts_ms, expires_at_ms) VALUES (p_key, 0, 0, 0) ON CONFLICT (key) DO NOTHING;\n  SELECT s.level"],
 ];
 

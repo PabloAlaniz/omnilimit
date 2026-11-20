@@ -8,7 +8,7 @@ import { buildHeaders } from '../../src/core/headers.js';
 import { deriveKey } from '../../src/core/key.js';
 import { checkAll, createLockout, type CombinedDecision, type Lockout } from '../../src/core/recipes.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
-import type { Decision, HitParams, Limiter, RawHit, Store } from '../../src/core/types.js';
+import type { Decision, HitParams, Limiter, RawHit, RawRefund, Reservation, Store } from '../../src/core/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const SPEC_DIR = join(here, '..', '..', '..', 'spec');
@@ -39,7 +39,8 @@ export function toPolicy(policy: { limit: number; window_ms: number; burst: numb
 
 /** Run one sequence vector against a store and compare decisions, raw state and headers. */
 export async function runSequence(vector: Vector, store: Store, saltSuffix = ''): Promise<void> {
-  let lastRaw: RawHit | undefined;
+  let lastRaw: RawHit | RawRefund | undefined;
+  let refundCalls = 0;
   const recording: Store = {
     tier: store.tier,
     async hit(key: string, params: HitParams, nowMs?: number) {
@@ -51,6 +52,11 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
       return lastRaw;
     },
     reset: (key: string) => store.reset!(key),
+    async refund(key: string, params: HitParams, sinceMs: number, nowMs?: number) {
+      refundCalls += 1;
+      lastRaw = await store.refund!(key, params, sinceMs, nowMs);
+      return lastRaw;
+    },
   };
   let profiles: Record<string, Record<string, string>> = {};
   const limiter = createLimiter({
@@ -65,16 +71,34 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
       return {};
     },
   });
+  // Hits that a later step refunds are reservations; the rest stay plain checks.
+  const refunded = new Set<number>(vector.steps.filter((step: Vector) => step.op === 'refund').map((step: Vector) => step.of));
+  const reservations = new Map<number, Reservation | null>();
   for (const [index, step] of vector.steps.entries()) {
     const context = `${vector.id} step ${index}`;
     if (step.op === 'reset') {
       expect(await limiter.reset(step.id), context).toBe(true);
       continue;
     }
-    const decision =
-      step.op === 'peek'
-        ? await limiter.peek(step.id, { nowMs: step.at_ms, ...(step.cost ? { cost: step.cost } : {}) })
-        : await limiter.check(step.id, { nowMs: step.at_ms, ...(step.cost ? { cost: step.cost } : {}) });
+    if (step.op === 'refund') {
+      const calls = refundCalls;
+      const done = await limiter.refund(reservations.get(step.of)!, { nowMs: step.at_ms });
+      const raw = lastRaw as RawRefund;
+      const got = done ? { refunded: done, state: { level: raw.level, ts: raw.ts } } : { refunded: done };
+      expect(got, context).toEqual(step.expect);
+      // A spent reservation does not reach the store again.
+      expect(refundCalls - calls, context).toBe(done ? 1 : 0);
+      continue;
+    }
+    const options = { nowMs: step.at_ms, ...(step.cost ? { cost: step.cost } : {}) };
+    let decision;
+    if (step.op === 'peek') decision = await limiter.peek(step.id, options);
+    else if (refunded.has(index)) {
+      const reserved = await limiter.reserve(step.id, options);
+      expect(reserved.reservation === null, context).toBe(!step.expect.allowed);
+      reservations.set(index, reserved.reservation);
+      decision = reserved.decision;
+    } else decision = await limiter.check(step.id, options);
     const { expect: want } = step;
     expect(
       {

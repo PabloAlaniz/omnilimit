@@ -23,6 +23,8 @@ from omnilimit import (
     Limiter,
     Lockout,
     RawHit,
+    RawRefund,
+    Reservation,
     build_headers,
     check_all,
     check_all_async,
@@ -69,12 +71,26 @@ def outcome(decision: Any, raw: RawHit | None, profiles: dict[str, Any]) -> dict
     }
 
 
+def _refunded(vector: dict[str, Any]) -> set[int]:
+    """Hit steps that a later step refunds: those run as reservations, the rest as checks."""
+    return {step["of"] for step in vector["steps"] if step.get("op") == "refund"}
+
+
+def refund_outcome(done: bool, raw: RawRefund | None) -> dict[str, Any]:
+    if not done:
+        return {"refunded": False}
+    assert raw is not None
+    return {"refunded": True, "state": {"level": raw.level, "ts": raw.ts}}
+
+
 @dataclass
 class Recording:
-    """Keeps the raw reply and both header profiles of the latest check."""
+    """Keeps the raw reply and both header profiles of the latest check, and counts refunds."""
 
     tier: Any
     raw: RawHit | None = None
+    refund: RawRefund | None = None
+    refund_calls: int = 0
     profiles: dict[str, Any] = field(default_factory=dict)
 
     def headers(self, data: HeaderInput) -> dict[str, str]:
@@ -102,6 +118,13 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
         def reset(self, key: str) -> None:
             store.reset(key)
 
+        def refund(
+            self, key: str, params: HitParams, since: int, now_ms: int | None = None
+        ) -> RawRefund:
+            recording.refund_calls += 1
+            recording.refund = store.refund(key, params, since, now_ms)
+            return recording.refund
+
     limiter = Limiter(
         **policy_of(vector),
         store=Recorder(),
@@ -111,18 +134,34 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
         store_timeout_ms=10_000,
         headers=recording.headers,
     )
+    refunded = _refunded(vector)
+    reservations: dict[int, Reservation | None] = {}
     for index, step in enumerate(vector["steps"]):
         op = step.get("op", "hit")
+        context = f"{vector['id']} step {index}"
         if op == "reset":
-            assert limiter.reset(step["id"]) is True, f"{vector['id']} step {index}"
+            assert limiter.reset(step["id"]) is True, context
+            continue
+        if op == "refund":
+            calls = recording.refund_calls
+            done = limiter.refund(reservations[step["of"]], now_ms=step["at_ms"])
+            assert refund_outcome(done, recording.refund) == step["expect"], context
+            # A spent reservation does not reach the store again.
+            assert recording.refund_calls - calls == int(done), context
             continue
         recording.raw = None
+        cost = step.get("cost", 1)
         if op == "peek":
-            decision = limiter.peek(step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1))
+            decision = limiter.peek(step["id"], now_ms=step["at_ms"], cost=cost)
+        elif index in refunded:
+            reserved = limiter.reserve(step["id"], now_ms=step["at_ms"], cost=cost)
+            assert (reserved.reservation is None) is not step["expect"]["allowed"], context
+            reservations[index] = reserved.reservation
+            decision = reserved.decision
         else:
-            decision = limiter.check(step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1))
+            decision = limiter.check(step["id"], now_ms=step["at_ms"], cost=cost)
         got = outcome(decision, recording.raw, recording.profiles)
-        assert got == step["expect"], f"{vector['id']} step {index}"
+        assert got == step["expect"], context
 
 
 async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> None:
@@ -146,6 +185,14 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
             if asyncio.iscoroutine(result):
                 await result
 
+        async def refund(
+            self, key: str, params: HitParams, since: int, now_ms: int | None = None
+        ) -> RawRefund:
+            recording.refund_calls += 1
+            result = store.refund(key, params, since, now_ms)
+            recording.refund = await result if asyncio.iscoroutine(result) else result
+            return recording.refund
+
     limiter = AsyncLimiter(
         **policy_of(vector),
         store=Recorder(),
@@ -155,22 +202,33 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
         store_timeout_ms=10_000,
         headers=recording.headers,
     )
+    refunded = _refunded(vector)
+    reservations: dict[int, Reservation | None] = {}
     for index, step in enumerate(vector["steps"]):
         op = step.get("op", "hit")
+        context = f"{vector['id']} step {index}"
         if op == "reset":
-            assert await limiter.reset(step["id"]) is True, f"{vector['id']} step {index}"
+            assert await limiter.reset(step["id"]) is True, context
+            continue
+        if op == "refund":
+            calls = recording.refund_calls
+            done = await limiter.refund(reservations[step["of"]], now_ms=step["at_ms"])
+            assert refund_outcome(done, recording.refund) == step["expect"], context
+            assert recording.refund_calls - calls == int(done), context
             continue
         recording.raw = None
+        cost = step.get("cost", 1)
         if op == "peek":
-            decision = await limiter.peek(
-                step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1)
-            )
+            decision = await limiter.peek(step["id"], now_ms=step["at_ms"], cost=cost)
+        elif index in refunded:
+            reserved = await limiter.reserve(step["id"], now_ms=step["at_ms"], cost=cost)
+            assert (reserved.reservation is None) is not step["expect"]["allowed"], context
+            reservations[index] = reserved.reservation
+            decision = reserved.decision
         else:
-            decision = await limiter.check(
-                step["id"], now_ms=step["at_ms"], cost=step.get("cost", 1)
-            )
+            decision = await limiter.check(step["id"], now_ms=step["at_ms"], cost=cost)
         got = outcome(decision, recording.raw, recording.profiles)
-        assert got == step["expect"], f"{vector['id']} step {index}"
+        assert got == step["expect"], context
 
 
 def run_concurrency(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> None:

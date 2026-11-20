@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TypedDict
 
-from omnilimit._types import HitParams, RawHit
+from omnilimit._types import HitParams, RawHit, RawRefund
 
 MIN_WINDOW_MS = 1000
 MAX_SAFE_INTEGER = 2**53 - 1
@@ -120,6 +120,25 @@ def apply_peek(state: MeterState | None, params: HitParams, now_ms: int) -> RawH
     elapsed = min(t - ts, params.drain_ms)
     drained = max(0, level - elapsed * params.limit)
     return RawHit(allowed=drained + params.window_ms <= params.capacity, level=drained, ts=ts)
+
+
+def apply_refund(
+    state: MeterState | None, params: HitParams, since: int, now_ms: int
+) -> tuple[RawRefund, MeterState | None]:
+    """Give back a reservation of `params.window_ms` units counted at `since`, as far as it has
+    not drained. Returns the answer and the state to persist, `None` when nothing changes."""
+    if state is None:
+        return RawRefund(level=0, ts=now_ms), None
+    t = max(now_ms, state.ts)
+    drained = max(0, state.level - min(t - state.ts, params.drain_ms) * params.limit)
+    give = 0
+    # A bucket older than the reservation was reset or expired since, and took it along.
+    if t >= since:
+        give = max(0, params.window_ms - min(t - since, params.drain_ms) * params.limit)
+    if drained == 0 or give == 0:
+        return RawRefund(level=drained, ts=state.ts), None
+    level = max(0, drained - give)
+    return RawRefund(level=level, ts=t), MeterState(level=level, ts=t)
 
 
 @dataclass(frozen=True, slots=True)

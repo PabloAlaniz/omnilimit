@@ -15,8 +15,8 @@ from typing import Any, Literal
 
 from sqlalchemy import text
 
-from omnilimit._types import HitParams, RawHit
-from omnilimit.stores.postgres import MIGRATION_SQL, _parse
+from omnilimit._types import HitParams, RawHit, RawRefund
+from omnilimit.stores.postgres import MIGRATION_SQL, _parse, _parse_refund
 
 __all__ = ["MIGRATION_SQL", "AsyncSqlAlchemyStore", "SqlAlchemyStore"]
 
@@ -29,6 +29,12 @@ _PEEK = text(
     "SELECT allowed, new_level, new_ts FROM omnilimit_peek_v1("
     "CAST(:key AS text), CAST(:limit AS bigint), CAST(:window_ms AS bigint), "
     "CAST(:capacity AS bigint), CAST(:drain_ms AS bigint), CAST(:now_ms AS bigint))"
+)
+_REFUND = text(
+    "SELECT new_level, new_ts FROM omnilimit_refund_v1("
+    "CAST(:key AS text), CAST(:limit AS bigint), CAST(:window_ms AS bigint), "
+    "CAST(:capacity AS bigint), CAST(:drain_ms AS bigint), CAST(:since AS bigint), "
+    "CAST(:now_ms AS bigint))"
 )
 _RESET = text("DELETE FROM omnilimit_state WHERE key = :key")
 _CLEANUP = text("SELECT omnilimit_cleanup_v1(CAST(:batch AS integer))")
@@ -76,6 +82,12 @@ class SqlAlchemyStore:
         with self._engine.connect() as connection:
             connection.execute(_RESET, {"key": key})
 
+    def refund(
+        self, key: str, params: HitParams, since: int, now_ms: int | None = None
+    ) -> RawRefund:
+        """Give back a hit counted at `since`, as far as it has not drained."""
+        return _parse_refund(self._fetch(_REFUND, {**_binds(key, params, now_ms), "since": since}))
+
     def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""
         return int(self._fetch(_CLEANUP, {"batch": batch})[0])
@@ -104,6 +116,13 @@ class AsyncSqlAlchemyStore:
     async def reset(self, key: str) -> None:
         async with self._engine.connect() as connection:
             await connection.execute(_RESET, {"key": key})
+
+    async def refund(
+        self, key: str, params: HitParams, since: int, now_ms: int | None = None
+    ) -> RawRefund:
+        """Give back a hit counted at `since`, as far as it has not drained."""
+        row = await self._fetch(_REFUND, {**_binds(key, params, now_ms), "since": since})
+        return _parse_refund(row)
 
     async def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""

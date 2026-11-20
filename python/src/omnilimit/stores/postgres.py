@@ -10,10 +10,13 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from omnilimit._generated import POSTGRES_MIGRATION_SQL
-from omnilimit._types import HitParams, RawHit
+from omnilimit._types import HitParams, RawHit, RawRefund
 
 MIGRATION_SQL = POSTGRES_MIGRATION_SQL
-"""Creates the table and functions. Apply it with your migration tool; it never runs on its own."""
+"""Creates the table and functions. Apply it with your migration tool; it never runs on its own.
+
+It is idempotent: applying it again after an upgrade adds what is new (`peek` in 0.2, `refund`
+in 0.4)."""
 
 _HIT_SQL = (
     "SELECT allowed, new_level, new_ts FROM omnilimit_hit_v1("
@@ -23,6 +26,11 @@ _PEEK_FN = "omnilimit_peek_v1"
 _PEEK_SQL = (
     "SELECT allowed, new_level, new_ts FROM omnilimit_peek_v1("
     "%s::text, %s::bigint, %s::bigint, %s::bigint, %s::bigint, %s::bigint)"
+)
+_REFUND_FN = "omnilimit_refund_v1"
+_REFUND_SQL = (
+    "SELECT new_level, new_ts FROM omnilimit_refund_v1("
+    "%s::text, %s::bigint, %s::bigint, %s::bigint, %s::bigint, %s::bigint, %s::bigint)"
 )
 _RESET_SQL = "DELETE FROM omnilimit_state WHERE key = %s"
 _CLEANUP_SQL = "SELECT omnilimit_cleanup_v1(%s::integer)"
@@ -46,6 +54,16 @@ def _parse(row: Any, fn: str = "omnilimit_hit_v1") -> RawHit:
     if row is None:
         raise ValueError(f"omnilimit: {fn} returned no rows")
     return RawHit(allowed=row[0] is True, level=int(row[1]), ts=int(row[2]))
+
+
+def _refund_params(key: str, params: HitParams, since: int, now_ms: int | None) -> tuple[Any, ...]:
+    return (key, params.limit, params.window_ms, params.capacity, params.drain_ms, since, now_ms)
+
+
+def _parse_refund(row: Any) -> RawRefund:
+    if row is None:
+        raise ValueError(f"omnilimit: {_REFUND_FN} returned no rows")
+    return RawRefund(level=int(row[0]), ts=int(row[1]))
 
 
 class PostgresStore:
@@ -76,6 +94,12 @@ class PostgresStore:
                 connection.execute(_RESET_SQL, (key,))
             return
         self._db.execute(_RESET_SQL, (key,))
+
+    def refund(
+        self, key: str, params: HitParams, since: int, now_ms: int | None = None
+    ) -> RawRefund:
+        """Give back a hit counted at `since`, as far as it has not drained."""
+        return _parse_refund(self._fetch(_REFUND_SQL, _refund_params(key, params, since, now_ms)))
 
     def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""
@@ -112,6 +136,13 @@ class AsyncPostgresStore:
                 await connection.execute(_RESET_SQL, (key,))
             return
         await self._db.execute(_RESET_SQL, (key,))
+
+    async def refund(
+        self, key: str, params: HitParams, since: int, now_ms: int | None = None
+    ) -> RawRefund:
+        """Give back a hit counted at `since`, as far as it has not drained."""
+        row = await self._fetch(_REFUND_SQL, _refund_params(key, params, since, now_ms))
+        return _parse_refund(row)
 
     async def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""

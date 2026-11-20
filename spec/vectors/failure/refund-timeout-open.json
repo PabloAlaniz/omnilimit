@@ -1,0 +1,16 @@
+{
+ "spec": "1",
+ "id": "failure/refund-timeout-open",
+ "kind": "failure",
+ "op": "refund",
+ "fault": "timeout",
+ "on_store_error": "open",
+ "policy": {
+  "limit": 5,
+  "window_ms": 60000,
+  "burst": 5
+ },
+ "expect": {
+  "refunded": false
+ }
+}

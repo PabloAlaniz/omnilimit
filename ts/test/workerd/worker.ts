@@ -12,7 +12,7 @@ interface Env {
 }
 
 interface Body {
-  op: 'sequence' | 'concurrency' | 'mixed-concurrency' | 'binding' | 'ip' | 'real-clock' | 'real-reset';
+  op: 'sequence' | 'concurrency' | 'mixed-concurrency' | 'binding' | 'ip' | 'real-clock' | 'real-reset' | 'real-refund';
   store?: 'memory' | 'do';
   [name: string]: unknown;
 }
@@ -35,10 +35,20 @@ export default {
     if (body.op === 'sequence') {
       const limiter = createLimiter(options(body['policy'] as never, body['salt'] as string));
       const out = [];
-      for (const step of body['steps'] as Array<{ id: string; at_ms: number; op?: 'peek' | 'reset'; cost?: number }>) {
+      type Step = { id: string; at_ms: number; op?: 'peek' | 'reset' | 'refund'; cost?: number; of?: number };
+      const steps = body['steps'] as Step[];
+      const refunded = new Set(steps.filter((step) => step.op === 'refund').map((step) => step.of));
+      const reservations = new Map<number, Awaited<ReturnType<typeof limiter.reserve>>['reservation']>();
+      for (const [index, step] of steps.entries()) {
+        const options = { nowMs: step.at_ms, cost: step.cost ?? 1 };
         if (step.op === 'reset') out.push({ reset: await limiter.reset(step.id) });
-        else if (step.op === 'peek') out.push(await limiter.peek(step.id, { nowMs: step.at_ms, cost: step.cost ?? 1 }));
-        else out.push(await limiter.check(step.id, { nowMs: step.at_ms, cost: step.cost ?? 1 }));
+        else if (step.op === 'refund') out.push({ refunded: await limiter.refund(reservations.get(step.of!) ?? null, { nowMs: step.at_ms }) });
+        else if (step.op === 'peek') out.push(await limiter.peek(step.id, options));
+        else if (refunded.has(index)) {
+          const { decision, reservation } = await limiter.reserve(step.id, options);
+          reservations.set(index, reservation);
+          out.push(decision);
+        } else out.push(await limiter.check(step.id, options));
       }
       return Response.json(out);
     }
@@ -74,6 +84,14 @@ export default {
       const denied = await limiter.peek('a');
       const reset = await limiter.reset('a');
       return Response.json({ first, denied, reset, after: await limiter.check('a') });
+    }
+    if (body.op === 'real-refund') {
+      // On the object's own clock, which also sets the alarm: a refund at once frees the unit.
+      const limiter = createLimiter({ limit: 1, windowMs: 60_000, store, scope: 'real', salt: body['salt'] as string, onStoreError: 'closed' });
+      const { reservation } = await limiter.reserve('a');
+      const denied = await limiter.peek('a');
+      const refunded = await limiter.refund(reservation);
+      return Response.json({ denied, refunded, again: await limiter.refund(reservation), after: await limiter.check('a') });
     }
     if (body.op === 'binding') {
       const limiter = createLimiter({

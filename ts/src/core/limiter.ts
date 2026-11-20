@@ -1,7 +1,17 @@
 import { assertCost, assertScope, resolvePolicy, viewOf } from './gcra.js';
 import { buildHeaders } from './headers.js';
 import { deriveKey } from './key.js';
-import type { Decision, HeaderInput, HitParams, Limiter, LimiterEvent, LimiterOptions, RawHit } from './types.js';
+import type {
+  Decision,
+  HeaderInput,
+  HitParams,
+  Limiter,
+  LimiterEvent,
+  LimiterOptions,
+  RawHit,
+  Reservation,
+  Store,
+} from './types.js';
 
 const DEFAULT_STORE_TIMEOUT_MS = 1000;
 const STORE_ERROR_RETRY_MS = 1000;
@@ -26,6 +36,14 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** What a limiter keeps for each reservation it made. Callers only hold the opaque handle. */
+interface ReservationState {
+  key: string;
+  params: HitParams;
+  sinceMs: number;
+  spent: boolean;
 }
 
 export function createLimiter(options: LimiterOptions): Limiter {
@@ -94,17 +112,27 @@ export function createLimiter(options: LimiterOptions): Limiter {
     );
   };
 
-  const decide = async (op: 'check' | 'peek', amount: number, run: () => Promise<RawHit>): Promise<Decision> => {
+  /** The decision, and the store's answer when there was one (`null` after a store failure). */
+  const decideRaw = async (
+    op: 'check' | 'peek',
+    amount: number,
+    run: () => Promise<RawHit>,
+  ): Promise<{ decision: Decision; hit: RawHit | null }> => {
     let hit: RawHit;
     try {
       hit = await withTimeout(run(), storeTimeoutMs);
     } catch (error) {
       emit({ type: 'store_error', op, scope, tier: store.tier, error });
-      return fromFailure();
+      return { decision: fromFailure(), hit: null };
     }
     emit({ type: hit.allowed ? 'allowed' : 'limited', op, scope, tier: store.tier });
-    return fromHit(hit, amount);
+    return { decision: fromHit(hit, amount), hit };
   };
+
+  const decide = async (op: 'check' | 'peek', amount: number, run: () => Promise<RawHit>): Promise<Decision> =>
+    (await decideRaw(op, amount, run)).decision;
+
+  const reservations = new WeakMap<Reservation, ReservationState>();
 
   /**
    * What the store receives for a request of this cost. Stores add `windowMs` per hit, so a
@@ -120,7 +148,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
     return { limit, windowMs: windowMs * cost, capacity, drainMs };
   };
 
-  const unsupported = (op: 'peek' | 'reset') =>
+  const unsupported = (op: 'peek' | 'reset' | 'refund') =>
     new TypeError(`omnilimit: this store (tier ${store.tier}) does not support ${op}`);
 
   const limiter: Limiter = {
@@ -149,6 +177,35 @@ export function createLimiter(options: LimiterOptions): Limiter {
         return false;
       }
       emit({ type: 'reset', op: 'reset', scope, tier: store.tier });
+      return true;
+    },
+    async reserve(id, reserveOptions) {
+      if (!store.refund) throw unsupported('refund');
+      const params = weighed(reserveOptions?.cost);
+      const key = await deriveKey(scope, policy, salt, id);
+      const { decision, hit } = await decideRaw('check', params.windowMs, () => store.hit(key, params, reserveOptions?.nowMs));
+      // Only what the store counted can be given back: not a denial, not an `open` failure.
+      if (!hit?.allowed || hit.ts === null) return { decision, reservation: null };
+      const reservation: Reservation = Object.freeze({ scope, cost: reserveOptions?.cost ?? 1 });
+      reservations.set(reservation, { key, params, sinceMs: hit.ts, spent: false });
+      return { decision, reservation };
+    },
+    async refund(reservation, refundOptions) {
+      if (reservation === null || reservation === undefined) return false;
+      const state = reservations.get(reservation);
+      if (!state) throw new TypeError('omnilimit: this reservation was not made by this limiter');
+      // Spent before the store call, so a second refund, even a concurrent one, does nothing.
+      if (state.spent) return false;
+      state.spent = true;
+      const refundFn = store.refund as NonNullable<Store['refund']>;
+      try {
+        await withTimeout(refundFn.call(store, state.key, state.params, state.sinceMs, refundOptions?.nowMs), storeTimeoutMs);
+      } catch (error) {
+        // No retry: a refund that timed out may have been applied, and must not be applied twice.
+        emit({ type: 'store_error', op: 'refund', scope, tier: store.tier, error });
+        return false;
+      }
+      emit({ type: 'refund', op: 'refund', scope, tier: store.tier });
       return true;
     },
   };

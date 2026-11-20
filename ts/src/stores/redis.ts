@@ -1,5 +1,12 @@
-import { REDIS_HIT_LUA, REDIS_HIT_SHA1, REDIS_PEEK_LUA, REDIS_PEEK_SHA1 } from '../generated/assets.js';
-import type { HitParams, RawHit, Store } from '../core/types.js';
+import {
+  REDIS_HIT_LUA,
+  REDIS_HIT_SHA1,
+  REDIS_PEEK_LUA,
+  REDIS_PEEK_SHA1,
+  REDIS_REFUND_LUA,
+  REDIS_REFUND_SHA1,
+} from '../generated/assets.js';
+import type { HitParams, RawHit, RawRefund, Store } from '../core/types.js';
 
 /**
  * The calls the store needs. Use `fromIoredis` or `fromNodeRedis`, or implement it yourself.
@@ -43,6 +50,26 @@ function isNoScript(error: unknown): boolean {
   return error instanceof Error && error.message.includes('NOSCRIPT');
 }
 
+async function evalScript(client: RedisEval, sha: string, script: string, key: string, args: string[], length: number): Promise<unknown[]> {
+  let reply: unknown;
+  try {
+    reply = await client.evalsha(sha, [key], args);
+  } catch (error) {
+    if (!isNoScript(error)) throw error;
+    reply = await client.eval(script, [key], args);
+  }
+  if (!Array.isArray(reply) || reply.length !== length) {
+    throw new Error('omnilimit: unexpected reply from the Redis script');
+  }
+  return reply;
+}
+
+function scriptArgs(params: HitParams, nowMs: number | undefined): string[] {
+  const args = [params.limit, params.windowMs, params.capacity, params.drainMs].map(String);
+  args.push(nowMs === undefined ? '' : String(nowMs));
+  return args;
+}
+
 async function runScript(
   client: RedisEval,
   sha: string,
@@ -51,18 +78,7 @@ async function runScript(
   params: HitParams,
   nowMs: number | undefined,
 ): Promise<RawHit> {
-  const args = [params.limit, params.windowMs, params.capacity, params.drainMs].map(String);
-  args.push(nowMs === undefined ? '' : String(nowMs));
-  let reply: unknown;
-  try {
-    reply = await client.evalsha(sha, [key], args);
-  } catch (error) {
-    if (!isNoScript(error)) throw error;
-    reply = await client.eval(script, [key], args);
-  }
-  if (!Array.isArray(reply) || reply.length !== 3) {
-    throw new Error('omnilimit: unexpected reply from the Redis script');
-  }
+  const reply = await evalScript(client, sha, script, key, scriptArgs(params, nowMs), 3);
   return { allowed: Number(reply[0]) === 1, level: Number(reply[1]), ts: Number(reply[2]) };
 }
 
@@ -75,6 +91,11 @@ export function redisStore(client: RedisEval): Store {
     async reset(key: string): Promise<void> {
       if (!client.del) throw new Error('omnilimit: reset needs a RedisEval with del()');
       await client.del(key);
+    },
+    async refund(key: string, params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund> {
+      const args = [...scriptArgs(params, nowMs), String(sinceMs)];
+      const reply = await evalScript(client, REDIS_REFUND_SHA1, REDIS_REFUND_LUA, key, args, 2);
+      return { level: Number(reply[0]), ts: Number(reply[1]) };
     },
   };
 }

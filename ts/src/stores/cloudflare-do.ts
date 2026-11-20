@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
-import { applyHit, applyPeek, type MeterState } from '../core/gcra.js';
-import type { HitParams, RawHit, Store } from '../core/types.js';
+import { applyHit, applyPeek, applyRefund, type MeterState } from '../core/gcra.js';
+import type { HitParams, RawHit, RawRefund, Store } from '../core/types.js';
 
 const STATE_KEY = 'meter';
 
@@ -36,6 +36,17 @@ export class OmnilimitDurableObject extends DurableObject {
     await this.ctx.storage.deleteAll();
   }
 
+  async refund(params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund> {
+    const current = (await this.ctx.storage.get<StoredMeter>(STATE_KEY)) ?? null;
+    const { refund, write } = applyRefund(current, params, sinceMs, nowMs ?? Date.now());
+    if (write) {
+      const expiresAt = write.ts + params.drainMs;
+      await this.ctx.storage.put<StoredMeter>(STATE_KEY, { ...write, expiresAt });
+      if (nowMs === undefined) await this.ctx.storage.setAlarm(expiresAt);
+    }
+    return refund;
+  }
+
   override async alarm(): Promise<void> {
     const current = await this.ctx.storage.get<StoredMeter>(STATE_KEY);
     if (!current) return;
@@ -51,6 +62,7 @@ interface DurableObjectStubLike {
   hit(params: HitParams, nowMs?: number): Promise<RawHit>;
   peek(params: HitParams, nowMs?: number): Promise<RawHit>;
   reset(): Promise<void>;
+  refund(params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund>;
 }
 
 /** Structural subset of `DurableObjectNamespace<OmnilimitDurableObject>`. */
@@ -90,6 +102,11 @@ export function durableObjectStore(namespace: OmnilimitNamespace | undefined): S
     peek: (key, params, nowMs) => call('peek', key, params, nowMs),
     async reset(key: string): Promise<void> {
       await stubFor(key).reset();
+    },
+    async refund(key: string, params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund> {
+      const stub = stubFor(key);
+      const reply = await (nowMs === undefined ? stub.refund(plain(params), sinceMs) : stub.refund(plain(params), sinceMs, nowMs));
+      return { level: reply.level, ts: reply.ts };
     },
   };
 }

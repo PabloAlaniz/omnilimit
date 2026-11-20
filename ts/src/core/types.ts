@@ -22,10 +22,19 @@ export interface RawHit {
   allowed: boolean;
   /** Meter level after this hit, or `null` for approximate stores. */
   level: number | null;
-  /** Timestamp stored by the hit, or `null` for approximate stores. */
+  /**
+   * Timestamp stored by the hit, on the store's clock, or `null` for approximate stores. For an
+   * allowed hit it is the `since` of its reservation.
+   */
   ts: number | null;
   /** Only set by approximate stores, which cannot compute it from a level. */
   retryAfterMs?: number;
+}
+
+/** What a store answers to a refund: the level and timestamp it left, or found. */
+export interface RawRefund {
+  level: number;
+  ts: number;
 }
 
 /**
@@ -48,6 +57,12 @@ export interface Store {
   peek?(key: string, params: HitParams, nowMs?: number): Promise<RawHit>;
   /** Delete the bucket, so the next hit starts from an empty meter. Optional. */
   reset?(key: string): Promise<void>;
+  /**
+   * Give back a hit counted at `sinceMs` (the `ts` it stored) with these params, as far as it has
+   * not drained yet, and never below zero. See "Refund" in the spec. Optional: approximate stores
+   * cannot answer it.
+   */
+  refund?(key: string, params: HitParams, sinceMs: number, nowMs?: number): Promise<RawRefund>;
 }
 
 export type DecisionReason = 'ok' | 'limited' | 'store_error';
@@ -75,12 +90,13 @@ export interface HeaderInput {
   effectiveMs: number;
 }
 
-/** The limiter operation an event comes from. */
-export type LimiterOp = 'check' | 'peek' | 'reset';
+/** The limiter operation an event comes from. `reserve` reports as `check`. */
+export type LimiterOp = 'check' | 'peek' | 'reset' | 'refund';
 
 export type LimiterEvent =
   | { type: 'allowed' | 'limited'; op: 'check' | 'peek'; scope: string; tier: Tier }
   | { type: 'reset'; op: 'reset'; scope: string; tier: Tier }
+  | { type: 'refund'; op: 'refund'; scope: string; tier: Tier }
   | { type: 'store_error'; op: LimiterOp; scope: string; tier: Tier; error: unknown };
 
 export interface LimiterOptions extends Policy {
@@ -100,6 +116,26 @@ export interface LimiterOptions extends Policy {
   salt?: string;
   /** Observability hook. Exceptions it throws are ignored. */
   onEvent?: (event: LimiterEvent) => void;
+}
+
+/**
+ * A counted request that can be given back once with `limiter.refund`. Opaque: only the limiter
+ * that made it can refund it.
+ */
+export interface Reservation {
+  readonly scope: string;
+  /** The units the request weighed. */
+  readonly cost: number;
+}
+
+/** What `limiter.reserve` answers. */
+export interface Reserved {
+  decision: Decision;
+  /**
+   * Set when the request was counted: allowed by the store. `null` when it was denied, or allowed
+   * by `onStoreError: 'open'` after a store failure, since nothing was counted then.
+   */
+  reservation: Reservation | null;
 }
 
 export interface Limiter {
@@ -124,4 +160,19 @@ export interface Limiter {
    * Throws a `TypeError` if the store cannot reset.
    */
   reset(id: string): Promise<boolean>;
+  /**
+   * `check`, keeping what is needed to give the request back with `refund` if its work does not
+   * happen. The decision is the one `check` would give. Throws a `TypeError` if the store cannot
+   * refund (approximate stores), before counting anything.
+   */
+  reserve(id: string, options?: { nowMs?: number; cost?: number }): Promise<Reserved>;
+  /**
+   * Give back a reservation, as far as it has not drained yet: a request refunded at once leaves
+   * no trace, and one refunded after the meter drained its units gives nothing. Resolves `true`
+   * once applied, and `false` for `null`, for a reservation already refunded (without calling the
+   * store), or if the store failed or timed out (reported through `onEvent`). It never rejects for
+   * a store failure and never retries: a refund that timed out may have been applied, and the
+   * reservation is spent either way. Throws a `TypeError` for a reservation from another limiter.
+   */
+  refund(reservation: Reservation | null, options?: { nowMs?: number }): Promise<boolean>;
 }

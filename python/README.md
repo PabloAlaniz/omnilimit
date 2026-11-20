@@ -39,14 +39,24 @@ A request can weigh several units, such as a batch: `limiter.check(user_id, cost
 
 To read the policy from configuration, `parse_policy("10/minute")` returns `limit` and `window_ms` ready to spread: `Limiter(**parse_policy(setting), store=..., scope=..., on_store_error=...)`. The grammar is `<limit>/<count><unit>` with `second`, `minute`, `hour` or `day`, and it is strict: `5/15minute` is valid, `10/min` is not.
 
-## Peek and reset
+## Peek, reset and refund
 
 ```python
 decision = limiter.peek(user_id)  # what check() would answer now, without counting
 limiter.reset(user_id)  # forget the bucket, e.g. after a successful login
+
+reserved = limiter.reserve(user_id, cost=len(items))  # check(), and keep a way to give it back
+if reserved.decision.allowed:
+    try:
+        do_work()
+    except Exception:
+        limiter.refund(reserved.reservation)  # only what has not drained yet
+        raise
 ```
 
-`peek` builds its decision like `check` and follows `on_store_error` the same way. When allowed, `remaining` includes the request you asked about. It is advisory: a concurrent request can take the last unit, so the `check` that follows is still the authority. `reset` returns `True` once the bucket is gone (or was never there) and `False` if the store failed or timed out, which `on_event` reports; it never raises for a store failure. Both raise `TypeError` if the store cannot do them, which is a configuration error. Every event carries `op` (`"check"`, `"peek"` or `"reset"`), and a successful reset emits type `"reset"`.
+`peek` builds its decision like `check` and follows `on_store_error` the same way. When allowed, `remaining` includes the request you asked about. It is advisory: a concurrent request can take the last unit, so the `check` that follows is still the authority. `reset` returns `True` once the bucket is gone (or was never there) and `False` if the store failed or timed out, which `on_event` reports; it never raises for a store failure. Both raise `TypeError` if the store cannot do them, which is a configuration error. Every event carries `op` (`"check"`, `"peek"`, `"reset"` or `"refund"`), and a successful reset emits type `"reset"`.
+
+`reserve` decides like `check`, and its `reservation` is `None` when nothing was counted (a denial, or `on_store_error="open"` after a store failure). `refund` gives back what is left of the request after the meter drained since it was counted, so a bucket never ends up more generous than if the request had never happened. It returns `True` once applied, and `False` for `None`, for a reservation already refunded (without calling the store), or when the store failed or timed out; it never raises for a store failure and never retries, since a timed-out refund may have been applied. A reservation belongs to the limiter that made it: another one raises `TypeError`. A successful refund emits type `"refund"`, and `reserve` reports as `"check"`. With an asyncpg, SQLAlchemy or psycopg store, reapply `MIGRATION_SQL` when upgrading to 0.4 to add `omnilimit_refund_v1`.
 
 ## Recipes
 

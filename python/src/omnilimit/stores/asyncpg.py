@@ -8,8 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from omnilimit._types import HitParams, RawHit
-from omnilimit.stores.postgres import MIGRATION_SQL, _hit_params, _parse
+from omnilimit._types import HitParams, RawHit, RawRefund
+from omnilimit.stores.postgres import (
+    MIGRATION_SQL,
+    _hit_params,
+    _parse,
+    _parse_refund,
+    _refund_params,
+)
 
 __all__ = ["MIGRATION_SQL", "AsyncpgStore"]
 
@@ -20,6 +26,10 @@ _HIT = (
 _PEEK = (
     "SELECT allowed, new_level, new_ts FROM omnilimit_peek_v1("
     "$1::text, $2::bigint, $3::bigint, $4::bigint, $5::bigint, $6::bigint)"
+)
+_REFUND = (
+    "SELECT new_level, new_ts FROM omnilimit_refund_v1("
+    "$1::text, $2::bigint, $3::bigint, $4::bigint, $5::bigint, $6::bigint, $7::bigint)"
 )
 _RESET = "DELETE FROM omnilimit_state WHERE key = $1"
 _CLEANUP = "SELECT omnilimit_cleanup_v1($1::integer)"
@@ -45,6 +55,13 @@ class AsyncpgStore:
 
     async def reset(self, key: str) -> None:
         await self._pool.execute(_RESET, key)
+
+    async def refund(
+        self, key: str, params: HitParams, since: int, now_ms: int | None = None
+    ) -> RawRefund:
+        """Give back a hit counted at `since`, as far as it has not drained."""
+        row = await self._pool.fetchrow(_REFUND, *_refund_params(key, params, since, now_ms))
+        return _parse_refund(row)
 
     async def cleanup(self, batch: int = 1000) -> int:
         """Delete up to `batch` expired buckets and return how many. Schedule it yourself."""

@@ -8,8 +8,8 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Literal
 
-from omnilimit._gcra import MeterState, apply_hit, apply_peek
-from omnilimit._types import HitParams, RawHit
+from omnilimit._gcra import MeterState, apply_hit, apply_peek, apply_refund
+from omnilimit._types import HitParams, RawHit, RawRefund
 
 
 def _wall_clock_ms() -> int:
@@ -57,6 +57,22 @@ class MemoryStore:
         """Forget the bucket, so the next hit starts from an empty meter."""
         with self._lock:
             self._entries.pop(key, None)
+
+    def refund(
+        self, key: str, params: HitParams, since: int, now_ms: int | None = None
+    ) -> RawRefund:
+        """Give back a hit counted at `since`, as far as it has not drained.
+
+        The bucket keeps its place in the eviction order: giving a request back does not make
+        it more recent.
+        """
+        now = now_ms if now_ms is not None else self._now()
+        with self._lock:
+            entry = self._entries.get(key)
+            refund, write = apply_refund(entry[0] if entry else None, params, since, now)
+            if write is not None:
+                self._entries[key] = (write, write.ts + params.drain_ms)
+            return refund
 
     def _evict(self, now: int) -> None:
         if len(self._entries) <= self._max_keys:

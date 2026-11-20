@@ -14,8 +14,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LUA = ROOT / "spec/scripts/redis/hit.lua"
 PEEK_LUA = ROOT / "spec/scripts/redis/peek.lua"
+REFUND_LUA = ROOT / "spec/scripts/redis/refund.lua"
 # Applied in order. Every file is idempotent, so the concatenation is too.
-SQL = [ROOT / "spec/scripts/postgres/001_v1.sql", ROOT / "spec/scripts/postgres/002_peek.sql"]
+SQL = [
+    ROOT / "spec/scripts/postgres/001_v1.sql",
+    ROOT / "spec/scripts/postgres/002_peek.sql",
+    ROOT / "spec/scripts/postgres/003_refund.sql",
+]
 VERSION = ROOT / "spec/VERSION"
 TS_TARGET = ROOT / "ts/src/generated/assets.ts"
 PY_TARGET = ROOT / "python/src/omnilimit/_generated.py"
@@ -24,12 +29,15 @@ PY_TARGET = ROOT / "python/src/omnilimit/_generated.py"
 def render() -> dict[Path, str]:
     lua = LUA.read_bytes()
     peek = PEEK_LUA.read_bytes()
+    refund = REFUND_LUA.read_bytes()
     sql = "\n".join(path.read_text(encoding="utf-8") for path in SQL)
     version = VERSION.read_text(encoding="utf-8").strip()
     sha1 = hashlib.sha1(lua).hexdigest()  # noqa: S324 - Redis identifies scripts by SHA-1
     peek_sha1 = hashlib.sha1(peek).hexdigest()  # noqa: S324
+    refund_sha1 = hashlib.sha1(refund).hexdigest()  # noqa: S324
     lua_text = json.dumps(lua.decode("utf-8"))
     peek_text = json.dumps(peek.decode("utf-8"))
+    refund_text = json.dumps(refund.decode("utf-8"))
     sql_text = json.dumps(sql)
     return {
         TS_TARGET: (
@@ -39,6 +47,8 @@ def render() -> dict[Path, str]:
             f"export const REDIS_HIT_LUA = {lua_text};\n"
             f"export const REDIS_PEEK_SHA1 = {json.dumps(peek_sha1)};\n"
             f"export const REDIS_PEEK_LUA = {peek_text};\n"
+            f"export const REDIS_REFUND_SHA1 = {json.dumps(refund_sha1)};\n"
+            f"export const REDIS_REFUND_LUA = {refund_text};\n"
             f"export const POSTGRES_MIGRATION_SQL = {sql_text};\n"
         ),
         PY_TARGET: (
@@ -48,6 +58,8 @@ def render() -> dict[Path, str]:
             f"REDIS_HIT_LUA = {lua_text}\n"
             f"REDIS_PEEK_SHA1 = {json.dumps(peek_sha1)}\n"
             f"REDIS_PEEK_LUA = {peek_text}\n"
+            f"REDIS_REFUND_SHA1 = {json.dumps(refund_sha1)}\n"
+            f"REDIS_REFUND_LUA = {refund_text}\n"
             f"POSTGRES_MIGRATION_SQL = {sql_text}\n"
         ),
     }

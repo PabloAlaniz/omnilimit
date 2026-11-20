@@ -94,6 +94,9 @@ def test_sqlalchemy_peek_reset_and_cleanup(engine: Any) -> None:
     assert not store.peek(key, PARAMS).allowed
     assert not store.hit(key, PARAMS).allowed
     store.reset(key)
+    since = store.hit(key, PARAMS).ts
+    assert since is not None
+    assert store.refund(key, PARAMS, since).level < PARAMS.window_ms
     assert store.hit(key, PARAMS).allowed
     expired = f"old{suffix()}"
     store.hit(expired, PARAMS, now_ms=1)
@@ -162,6 +165,10 @@ def test_async_sqlalchemy_real_clock_peek_reset_and_cleanup(async_url: str) -> N
             assert not (await limiter.peek("a")).allowed
             assert await limiter.reset("a")
             assert (await limiter.check("a")).allowed
+            reserved = await limiter.reserve("a")
+            assert not (await limiter.peek("a")).allowed
+            assert await limiter.refund(reserved.reservation)
+            assert (await limiter.peek("a")).allowed
             await store.hit(f"old{suffix()}", PARAMS, now_ms=1)
             assert await store.cleanup(10_000) >= 1
         finally:
@@ -207,6 +214,9 @@ def test_asyncpg_real_clock_peek_reset_and_cleanup(pg_url: str) -> None:
             assert not (await limiter.peek("a")).allowed
             assert await limiter.reset("a")
             assert (await limiter.peek("a")).allowed
+            reserved = await limiter.reserve("a")
+            assert await limiter.refund(reserved.reservation)
+            assert (await limiter.peek("a")).remaining == 2
             await store.hit(f"old{suffix()}", PARAMS, now_ms=1)
             assert await store.cleanup(10_000) >= 1
         finally:

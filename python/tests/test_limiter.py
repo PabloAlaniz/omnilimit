@@ -10,7 +10,16 @@ from typing import Any
 
 import pytest
 
-from omnilimit import AsyncLimiter, HitParams, Limiter, LimiterEvent, MemoryStore, RawHit
+from omnilimit import (
+    AsyncLimiter,
+    HitParams,
+    Limiter,
+    LimiterEvent,
+    MemoryStore,
+    RawHit,
+    RawRefund,
+    Reservation,
+)
 from omnilimit._gcra import resolve_policy
 from omnilimit._key import derive_key
 from omnilimit.ip import canonical_ip, client_key, mask_ip, resolve_client_ip
@@ -504,3 +513,166 @@ class TestPeekAndReset:
             assert asyncio.run(limiter.reset("a")) is False
         assert [(e.type, e.op) for e in events] == [("store_error", "reset")] * 2
         assert isinstance(events[1].error, TimeoutError)
+
+
+class TestReserveAndRefund:
+    def test_reserve_decides_like_check_and_refund_gives_it_back(self) -> None:
+        limiter = Limiter(**BASE, store=MemoryStore())
+        first = limiter.reserve("a", now_ms=1000, cost=2)
+        assert (first.decision.allowed, first.decision.remaining) == (True, 0)
+        assert first.reservation is not None
+        assert (first.reservation.scope, first.reservation.cost) == ("t", 2)
+        assert repr(first.reservation) == "Reservation(scope='t', cost=2)"
+        denied = limiter.reserve("a", now_ms=1000)
+        assert (denied.decision.reason, denied.reservation) == ("limited", None)
+        assert limiter.refund(denied.reservation) is False
+        assert limiter.refund(first.reservation, now_ms=1000) is True
+        assert limiter.peek("a", now_ms=1000).remaining == 2
+
+    def test_refund_is_given_at_most_once_without_calling_the_store_again(self) -> None:
+        memory_store = MemoryStore()
+        calls: list[int] = []
+
+        class Counting:
+            tier = "local"
+            hit = memory_store.hit
+
+            def refund(self, *args: Any) -> RawRefund:
+                calls.append(1)
+                return memory_store.refund(*args)
+
+        limiter = Limiter(**BASE, store=Counting())
+        reservation = limiter.reserve("a").reservation
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: limiter.refund(reservation), range(8)))
+        assert sorted(results) == [False] * 7 + [True]
+        assert limiter.refund(reservation) is False
+        assert calls == [1]
+
+    def test_only_the_limiter_that_made_it_can_refund_it(self) -> None:
+        store = MemoryStore()
+        one = Limiter(**BASE, store=store)
+        other = Limiter(**BASE, store=store)
+        reservation = one.reserve("a").reservation
+        with pytest.raises(TypeError, match="not made by this limiter"):
+            other.refund(reservation)
+        with pytest.raises(TypeError, match="not made by this limiter"):
+            one.refund("forged")  # type: ignore[arg-type]
+        assert one.refund(reservation) is True
+
+    def test_a_store_without_refund_cannot_reserve(self) -> None:
+        store = Blocking()
+        store.release.set()
+        with pytest.raises(TypeError, match="does not support refund"):
+            Limiter(**BASE, store=store).reserve("a")
+        assert store.calls == 0
+        with pytest.raises(TypeError, match="does not support refund"):
+            asyncio.run(AsyncLimiter(**BASE, store=AsyncOk()).reserve("a"))
+
+    def test_a_failed_refund_returns_false_reports_it_and_spends_the_reservation(self) -> None:
+        events: list[LimiterEvent] = []
+        release = threading.Event()
+        memory_store = MemoryStore()
+        mode = {"fail": True}
+
+        class Flaky:
+            tier = "exact"
+            hit = memory_store.hit
+            peek = memory_store.peek
+
+            def refund(self, *args: Any) -> RawRefund:
+                if mode["fail"]:
+                    release.wait(5)
+                return memory_store.refund(*args)
+
+        limiter = Limiter(**BASE, store=Flaky(), store_timeout_ms=20, on_event=events.append)
+        try:
+            lost = limiter.reserve("a").reservation
+            assert limiter.refund(lost) is False
+        finally:
+            release.set()
+        mode["fail"] = False
+        assert limiter.refund(lost) is False
+        kept = limiter.reserve("a").reservation
+        assert limiter.refund(kept) is True
+        assert [(e.type, e.op) for e in events] == [
+            ("allowed", "check"),
+            ("store_error", "refund"),
+            ("allowed", "check"),
+            ("refund", "refund"),
+        ]
+        assert isinstance(events[1].error, TimeoutError)
+
+    def test_a_request_allowed_by_a_store_failure_is_not_a_reservation(self) -> None:
+        class Down:
+            tier = "exact"
+
+            def hit(self, *args: Any) -> RawHit:
+                raise ConnectionError("down")
+
+            def refund(self, *args: Any) -> RawRefund:
+                raise AssertionError("unreachable")
+
+        limiter = Limiter(**{**BASE, "on_store_error": "open"}, store=Down())
+        reserved = limiter.reserve("a")
+        assert (reserved.decision.allowed, reserved.decision.reason) == (True, "store_error")
+        assert reserved.reservation is None
+
+    def test_async_reserve_and_refund(self) -> None:
+        events: list[LimiterEvent] = []
+        memory_store = MemoryStore()
+
+        class Async:
+            tier = "exact"
+
+            async def hit(self, *args: Any) -> RawHit:
+                return memory_store.hit(*args)
+
+            async def refund(self, *args: Any) -> RawRefund:
+                return memory_store.refund(*args)
+
+        class Broken(Async):
+            async def refund(self, *args: Any) -> RawRefund:
+                raise ConnectionError("down")
+
+        async def run() -> None:
+            limiter = AsyncLimiter(**BASE, store=Async(), on_event=events.append)
+            reserved = await limiter.reserve("a", now_ms=1000, cost=2)
+            assert isinstance(reserved.reservation, Reservation)
+            assert (await limiter.reserve("a", now_ms=1000)).reservation is None
+            assert await limiter.refund(None) is False
+            assert await limiter.refund(reserved.reservation, now_ms=1000) is True
+            assert await limiter.refund(reserved.reservation, now_ms=1000) is False
+            assert (await limiter.check("a", now_ms=1000)).allowed
+            broken = AsyncLimiter(**BASE, store=Broken(), on_event=events.append)
+            assert await broken.refund((await broken.reserve("b")).reservation) is False
+
+        asyncio.run(run())
+        assert [(e.type, e.op) for e in events] == [
+            ("allowed", "check"),
+            ("limited", "check"),
+            ("refund", "refund"),
+            ("allowed", "check"),
+            ("allowed", "check"),
+            ("store_error", "refund"),
+        ]
+
+    def test_refund_on_the_real_clock_gives_back_only_what_has_not_drained(self) -> None:
+        clock = [1_000_000]
+        limiter = Limiter(**{**BASE, "limit": 1}, store=MemoryStore(now=lambda: clock[0]))
+        reservation = limiter.reserve("a").reservation
+        clock[0] += 1000
+        assert limiter.refund(reservation) is True
+        assert limiter.check("a").allowed
+        assert not limiter.peek("a").allowed
+
+    def test_memory_refund_keeps_the_eviction_order(self) -> None:
+        params = HitParams(limit=1, window_ms=1000, capacity=2000, drain_ms=2000)
+        store = MemoryStore(max_keys=2)
+        store.hit("a", params, now_ms=5000)
+        store.hit("a", params, now_ms=5000)
+        store.hit("b", params, now_ms=5001)
+        assert store.refund("a", params, 5000, now_ms=5002) == RawRefund(1000, 5002)
+        store.hit("c", params, now_ms=5003)  # evicts "a", the oldest write, despite its refund
+        assert store.refund("a", params, 5000, now_ms=5004) == RawRefund(0, 5004)
+        assert store.refund("b", params, 5001, now_ms=5004) == RawRefund(0, 5004)

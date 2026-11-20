@@ -2,7 +2,16 @@
 
 from typing import Any
 
-from omnilimit import AsyncLimiter, AsyncStore, Decision, Limiter, MemoryStore, Store
+from omnilimit import (
+    AsyncLimiter,
+    AsyncStore,
+    Decision,
+    Limiter,
+    MemoryStore,
+    Reservation,
+    Reserved,
+    Store,
+)
 from omnilimit.stores.postgres import AsyncPostgresStore, PostgresStore
 from omnilimit.stores.redis import AsyncRedisStore, RedisStore
 
@@ -14,6 +23,9 @@ for store in stores:
     limiter = Limiter(store=store, scope="s", limit=1, window_ms=1000, on_store_error="open")
     peeked: Decision = limiter.peek("id")
     was_reset: bool = limiter.reset("id")
+    reserved: Reserved = limiter.reserve("id", cost=1)
+    reservation: Reservation | None = reserved.reservation
+    was_refunded: bool = limiter.refund(reservation)
 either: list[AsyncStore | Store] = [*async_stores, MemoryStore()]
 for async_store in either:
     AsyncLimiter(store=async_store, scope="s", limit=1, window_ms=1000, on_store_error="open")

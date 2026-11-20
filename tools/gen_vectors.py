@@ -105,6 +105,68 @@ class Meter:
     def reset(self) -> None:
         self.level, self.ts, self.exact = 0, None, Fraction(0)
 
+    def refund(self, now: int, since: int, cost: int) -> dict:
+        """Give back a reservation of `cost` units made at `since` (the ts its hit stored)."""
+        assert 1 <= cost <= self.burst
+        ts = now if self.ts is None else self.ts
+        t = max(now, ts)
+        elapsed = min(t - ts, self.drain)
+        drained = max(0, self.level - elapsed * self.limit)
+        rate = Fraction(self.limit, self.window)
+        exact = max(Fraction(0), self.exact - elapsed * rate)
+        assert Fraction(drained, self.window) == exact, "integer meter diverged from the rational model"
+        if t < since:
+            # The bucket is older than the reservation: it was reset or expired, so it is gone.
+            give, give_exact = 0, Fraction(0)
+        else:
+            since_elapsed = min(t - since, self.drain)
+            give = max(0, cost * self.window - since_elapsed * self.limit)
+            give_exact = max(Fraction(0), cost - since_elapsed * rate)
+            # The cap at `drain` must not change the answer: past it, nothing is left to give.
+            assert give == max(0, cost * self.window - (t - since) * self.limit)
+        assert Fraction(give, self.window) == give_exact, "refund diverged from the rational model"
+        if self.ts is None or drained == 0 or give == 0:
+            # A refund that changes nothing writes nothing, and reports what a peek would.
+            return {"level": drained, "ts": ts}
+        self.level, self.ts = max(0, drained - give), t
+        self.exact = max(Fraction(0), exact - give_exact)
+        return {"level": self.level, "ts": t}
+
+    def force(self, now: int, cost: int) -> int:
+        """Count a hit without deciding it: replays a hit that was allowed in another history."""
+        ts = now if self.ts is None else self.ts
+        t = max(now, ts)
+        elapsed = min(t - ts, self.drain)
+        drained = max(0, self.level - elapsed * self.limit)
+        exact = max(Fraction(0), self.exact - elapsed * Fraction(self.limit, self.window))
+        self.level, self.ts, self.exact = drained + cost * self.window, t, exact + cost
+        return t
+
+    def level_at(self, now: int) -> int:
+        ts = now if self.ts is None else self.ts
+        return max(0, self.level - min(max(now, ts) - ts, self.drain) * self.limit)
+
+
+def counterfactual(limit: int, window_ms: int, burst: int, history: list[dict], skip: int, now: int) -> int:
+    """The level at `now` had step `skip` not been counted, every other step happening as it did.
+
+    `history` holds one id's steps in order. Hits that were allowed count, whether or not they
+    would fit here: the claim is about the same history without one reservation.
+    """
+    meter = Meter(limit, window_ms, burst)
+    # With a clock going backwards, a hit may store another ts here than it did for real.
+    since: dict[int, int] = {}
+    for event in history:
+        if event["index"] == skip:
+            continue
+        if event["op"] == "hit" and event["allowed"]:
+            since[event["index"]] = meter.force(event["at"], event["cost"])
+        elif event["op"] == "reset":
+            meter.reset()
+        elif event["op"] == "refund" and event["applied"]:
+            meter.refund(event["at"], since[event["of"]], event["cost"])
+    return meter.level_at(now)
+
 
 def headers(scope: str, limit: int, window_ms: int, r: dict) -> dict:
     t = ceil_div(r["effective_ms"], 1000)
@@ -122,19 +184,64 @@ def headers(scope: str, limit: int, window_ms: int, r: dict) -> dict:
 
 def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list[tuple], scope: str = "t") -> dict:
     """`moves` are `(at_ms, id)` hits, or `(at_ms, id, op)` with op `hit`, `peek` or `reset`, or
-    `(at_ms, id, op, cost)` for a hit or peek that weighs more than one unit."""
+    `(at_ms, id, op, cost)` for a hit or peek that weighs more than one unit, or
+    `(at_ms, id, "refund", of)` giving back the hit at step `of`. `of` may be a function that
+    picks one from `(fresh, spent)`, the allowed hit steps of that id not refunded yet and
+    already refunded, or returns `None` to drop the move."""
     meters: dict[str, Meter] = {}
+    histories: dict[str, list[dict]] = {}
     steps = []
     for move in moves:
         at, who = move[0], move[1]
         op = move[2] if len(move) > 2 else "hit"
         meter = meters.setdefault(who, Meter(limit, window_ms, burst))
+        history = histories.setdefault(who, [])
         if op == "reset":
             meter.reset()
+            history.append({"index": len(steps), "op": "reset", "at": at})
             steps.append({"at_ms": at, "id": who, "op": "reset"})
+            continue
+        if op == "refund":
+            of = move[3]
+            if callable(of):
+                fresh = [e["index"] for e in history if e["op"] == "hit" and e["allowed"] and not e["refunded"]]
+                spent = [e["index"] for e in history if e["op"] == "hit" and e["allowed"] and e["refunded"]]
+                of = of(fresh, spent)
+                if of is None:
+                    continue
+            target = next(e for e in history if e["index"] == of)
+            assert target["op"] == "hit" and target["allowed"], "only an allowed hit is a reservation"
+            event = {"index": len(steps), "op": "refund", "at": at, "of": of, "since": target["since"], "cost": target["cost"]}
+            history.append(event)
+            if target["refunded"]:
+                event["applied"] = False
+                steps.append({"at_ms": at, "id": who, "op": "refund", "of": of, "expect": {"refunded": False}})
+                continue
+            target["refunded"] = True
+            event["applied"] = True
+            # Across a reset, a refund may take units counted after it: the spec leaves that case
+            # out of the comparison, so it is checked only when no refund since `of` crossed one.
+            event["crossed"] = any(e["op"] == "reset" and e["index"] > of for e in history)
+            crossed = any(e["op"] == "refund" and e["applied"] and e["crossed"] and e["index"] > of for e in history)
+            # Both buckets are compared at the store's time, which a clock going backwards
+            # does not move back.
+            # The comparison assumes a store clock that does not go backwards: with one that does,
+            # the reservation's ts changes how every later step drains, so there is no single
+            # history without it to compare with.
+            times = [e["at"] for e in history]
+            monotone = all(x <= y for x, y in zip(times, times[1:]))
+            state = meter.refund(at, target["since"], target["cost"])
+            if monotone and not crossed:
+                floor = counterfactual(limit, window_ms, burst, history[:-1], of, at)
+                assert meter.level_at(at) >= floor, f"{vector_id}: refund of step {of} is more generous than never counting it"
+            steps.append({"at_ms": at, "id": who, "op": "refund", "of": of, "expect": {"refunded": True, "state": state}})
             continue
         cost = move[3] if len(move) > 3 else 1
         r = meter.peek(at, cost) if op == "peek" else meter.hit(at, cost)
+        if op == "hit":
+            history.append(
+                {"index": len(steps), "op": "hit", "at": at, "cost": cost, "allowed": r["allowed"], "since": r["state"]["ts"], "refunded": False}
+            )
         # `op` and `cost` are only written when they are not the default, so earlier vectors
         # keep their bytes.
         tag = {"op": op} if op != "hit" else {}
@@ -262,6 +369,62 @@ def sequences() -> dict[str, dict]:
             at += rng.choice([0, 0, 1, 17, 333, 1000, window // limit, window // limit + 1])
             moves.append((at, rng.choice("aab"), rng.choice(["hit", "hit", "hit", p, p, r])))
         out[f"sequence/ops-random-{n:03d}"] = sequence(f"sequence/ops-random-{n:03d}", limit, window, burst, moves)
+
+    f = "refund"
+    with_refund = {
+        # Given back at once, the reservation leaves no trace: the meter is where it was before it.
+        "refund-immediately-restores-the-meter": (3, 1000, 3, [(b, a), (b, a), (b, a, f, 1), (b, a), (b, a), (b, a)]),
+        # 200 ms later the meter drained 400 of the 1000 units the hit added: only 600 come back.
+        "refund-after-partial-drain-gives-the-rest": (2, 1000, 2, [(b, a), (b, a), (b + 200, a, f, 1), (b + 200, a), (b + 200, a)]),
+        "refund-after-full-drain-gives-nothing": (1, 1000, 1, [(b, a), (b + 1000, a, f, 0), (b + 1000, a), (b + 1500, a, f, 2)]),
+        "refund-with-cost": (10, 60_000, 10, [(b, a, h, 4), (b, a, h, 3), (b + 6000, a, f, 0), (b + 6000, a, h, 6), (b + 6000, a, h, 2)]),
+        # The reservation went with the reset; what was counted after it is not taken below zero.
+        "refund-never-goes-below-zero": (1, 10_000, 3, [(b, a, h, 3), (b + 1, a, r), (b + 1, a), (b + 1, a, f, 0), (b + 1, a), (b + 1, a)]),
+        # A denied request in between does not make the refund generous: it was never counted.
+        "refund-after-other-hits-is-not-more-generous": (1, 1000, 2, [(b, a), (b, a), (b, a), (b + 100, a, f, 0), (b + 100, a), (b + 100, a)]),
+        "refund-clock-regression": (
+            3,
+            1000,
+            3,
+            [(b, a), (b, a), (b - 5000, a, f, 1), (b - 5000, a), (b - 5000, a), (b, a, r), (b - 5000, a), (b - 5000, a, f, 4), (b - 5000, a, p)],
+        ),
+        "refund-on-missing-bucket-writes-nothing": (2, 1000, 2, [(b, a), (b + 1, a, r), (b + 2, a, f, 0), (b - 9000, a, p), (b + 2, a), (b + 2, a), (b + 2, a)]),
+        "refund-twice-gives-once": (2, 60_000, 2, [(b, a), (b, a), (b, a, f, 1), (b, a, f, 1), (b, a), (b, a)]),
+        "refund-only-touches-its-id": (1, 60_000, 1, [(b, "a"), (b, "b"), (b, "a", f, 0), (b, "a"), (b, "b")]),
+        # Reservations overlap: each one gives back only its own units.
+        "refund-overlapping-reservations": (
+            5,
+            5000,
+            5,
+            [(b, a, h, 2), (b + 100, a, h, 2), (b + 300, a), (b + 400, a, f, 1), (b + 900, a, f, 0), (b + 900, a, f, 2), (b + 900, a, h, 5)],
+        ),
+    }
+    for k, v in with_refund.items():
+        out[f"sequence/{k}"] = sequence(f"sequence/{k}", *v)
+
+    rng = random.Random(20261120)
+
+    def pick(fresh: list[int], spent: list[int]) -> int | None:
+        if spent and rng.random() < 0.1:
+            return rng.choice(spent)
+        return rng.choice(fresh) if fresh else None
+
+    for n in range(10):
+        limit = rng.choice([1, 2, 3, 5, 7, 10, 60, 997])
+        window = rng.choice([1000, 1009, 10_000, 60_000, 900_000])
+        burst = rng.choice([1, 2, 3, limit, limit + 1, limit * 2])
+        at = BASE + rng.randrange(1000)
+        moves = []
+        for _ in range(rng.randrange(12, 40)):
+            at += rng.choice([0, 0, 1, 17, 333, 1000, window // limit, window // limit + 1, window])
+            op = rng.choice([h, h, h, f, f, p, r])
+            who = rng.choice("aab")
+            if op == f:
+                moves.append((at, who, f, pick))
+            else:
+                cost = min(burst, rng.choice([1, 1, 2, 3, burst, max(1, burst // 2)]))
+                moves.append((at, who, op, cost))
+        out[f"sequence/refund-random-{n:03d}"] = sequence(f"sequence/refund-random-{n:03d}", limit, window, burst, moves)
     return out
 
 
@@ -402,6 +565,21 @@ def failures() -> dict[str, dict]:
                 "on_store_error": mode,
                 "policy": {"limit": 5, "window_ms": 60_000, "burst": 5},
                 "expect": expect,
+            }
+    # A refund that fails is reported as `false` whatever the mode: no request is being decided.
+    # Only the refund fails: the hit before it is what makes the reservation.
+    for fault in ["error", "timeout"]:
+        for mode in ["open", "closed"]:
+            vid = f"failure/refund-{fault}-{mode}"
+            out[vid] = {
+                "spec": SPEC,
+                "id": vid,
+                "kind": "failure",
+                "op": "refund",
+                "fault": fault,
+                "on_store_error": mode,
+                "policy": {"limit": 5, "window_ms": 60_000, "burst": 5},
+                "expect": {"refunded": False},
             }
     return out
 
