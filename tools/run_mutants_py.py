@@ -51,12 +51,6 @@ CORE = [
         "own = _peeked([entry[0].check(entry[1], cost=_cost(entry)) for entry in entries])",
     ),
     (
-        "lockout counts successes",
-        "_recipes.py",
-        "            if self._reset_on_success:\n                self._limiter.reset(id_value)",
-        "            self._limiter.check(id_value)",
-    ),
-    (
         "check_all stops peeking at the first denial",
         "_recipes.py",
         "own = _peeked([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])",
@@ -107,18 +101,6 @@ CORE = [
         'if limiter.tier == "approximate" and False:',
     ),
     (
-        "commit counts a denied pending",
-        "_recipes.py",
-        "lambda: _count_all(entries) if own.allowed else own,",
-        "lambda: _count_all(entries),",
-    ),
-    (
-        "async commit counts a denied pending",
-        "_recipes.py",
-        "return await _count_all_async(entries) if own.allowed else own",
-        "return await _count_all_async(entries)",
-    ),
-    (
         "a repeated settlement runs again",
         "_recipes.py",
         "        if self._by is None:\n            self._by = op\n            return True\n",
@@ -143,18 +125,6 @@ CORE = [
         "        self._claim(op)\n        self._task = asyncio.ensure_future(work())\n",
     ),
     (
-        "reserve cancel does not refund",
-        "_recipes.py",
-        "        lambda: Cancelled(tuple(_refund_each(entries, held))),",
-        "        lambda: Cancelled(tuple(None for _ in held)),",
-    ),
-    (
-        "async reserve cancel does not refund",
-        "_recipes.py",
-        "        return Cancelled(tuple(await _refund_each_async(entries, held)))",
-        "        return Cancelled(tuple(None for _ in held))",
-    ),
-    (
         "reserve_all does not compensate a denial",
         "_recipes.py",
         "        refunded = _refund_each(entries, held)\n",
@@ -173,27 +143,126 @@ CORE = [
         "        False if reservation is None else entry[0].refund(reservation)\n",
     ),
     (
-        "reserve_all validates lazily",
-        "_recipes.py",
-        '    _validate("reserve_all", entries, "reserve")\n    decisions: list[Decision] = []\n    held: list[Reservation | None] = []\n    for entry in entries:\n        reserved = entry[0].reserve(',
-        '    decisions: list[Decision] = []\n    held: list[Reservation | None] = []\n    for entry in entries:\n        reserved = entry[0].reserve(',
-    ),
-    (
         "reserve_all trusts a store without refund",
         "_recipes.py",
         '        if mode == "reserve":\n            _store_method(limiter._store, "refund")\n',
         "",
     ),
     (
+        "commit counts a denied pending",
+        "_recipes.py",
+        '            if self.mode == "peek" and own.allowed\n',
+        '            if self.mode == "peek"\n',
+    ),
+    (
+        "async commit counts a denied pending",
+        "_recipes.py",
+        '        if self.mode == "peek" and self.allowed:\n            return await _count_all_async',
+        '        if self.mode == "peek":\n            return await _count_all_async',
+    ),
+    (
+        "reserve cancel does not refund",
+        "_recipes.py",
+        "        return Cancelled(tuple(_refund_each(self._entries, self._held)))",
+        "        return Cancelled(tuple(None for _ in self._held))",
+    ),
+    (
+        "async reserve cancel does not refund",
+        "_recipes.py",
+        "        return Cancelled(tuple(await _refund_each_async(self._entries, self._held)))",
+        "        return Cancelled(tuple(None for _ in self._held))",
+    ),
+    (
+        "reserve_all validates lazily",
+        "_recipes.py",
+        '    _validate(recipe, entries, "reserve")\n',
+        "",
+    ),
+    (
+        "lockout fail stops at the first denial",
+        "_recipes.py",
+        "        return _peeked([entry[0].check(entry[1]) for entry in self._entries])",
+        "        checks = []\n"
+        "        for entry in self._entries:\n"
+        "            checks.append(entry[0].check(entry[1]))\n"
+        "            if not checks[-1].allowed:\n"
+        "                break\n"
+        "        return _peeked(checks)",
+    ),
+    (
+        "async lockout fail stops at the first denial",
+        "_recipes.py",
+        "        return _peeked([await entry[0].check(entry[1]) for entry in self._entries])",
+        "        checks = []\n"
+        "        for entry in self._entries:\n"
+        "            checks.append(await entry[0].check(entry[1]))\n"
+        "            if not checks[-1].allowed:\n"
+        "                break\n"
+        "        return _peeked(checks)",
+    ),
+    (
+        "lockout succeed ignores reset_on_success",
+        "_recipes.py",
+        "                if self._resetting[index]:",
+        "                if True:",
+    ),
+    (
+        "lockout succeed on a locked gate resets",
+        "_recipes.py",
+        "        if self.allowed:\n            for index, (limiter, id_value, *_) in enumerate",
+        "        if True:\n            for index, (limiter, id_value, *_) in enumerate",
+    ),
+    (
+        "lockout succeed stops after a failed reset",
+        "_recipes.py",
+        "                    resets[index] = limiter.reset(id_value)\n",
+        "                    resets[index] = limiter.reset(id_value)\n"
+        "                    if not resets[index]:\n"
+        "                        break\n",
+    ),
+    (
+        "async lockout succeed stops after a failed reset",
+        "_recipes.py",
+        "                    resets[index] = await limiter.reset(id_value)\n",
+        "                    resets[index] = await limiter.reset(id_value)\n"
+        "                    if not resets[index]:\n"
+        "                        break\n",
+    ),
+    (
+        "lockout reserve fail counts again",
+        "_recipes.py",
+        'if self.mode == "reserve" or not self.allowed:\n            return self._own',
+        "if not self.allowed:\n            return self._own",
+    ),
+    (
+        "lockout reserve succeed keeps the limits it does not reset",
+        "_recipes.py",
+        '                elif self.mode == "reserve":\n',
+        "                elif False:\n",
+    ),
+    (
         "lockout counts a failure when verify raises",
         "_recipes.py",
-        "        if verify():",
-        "        try:\n"
-        "            verified = verify()\n"
-        "        except Exception:\n"
-        "            self._limiter.check(id_value)\n"
-        "            raise\n"
-        "        if verified:",
+        "            gate.cancel()\n            raise",
+        "            gate.fail()\n            raise",
+    ),
+    (
+        "async lockout counts a failure when verify raises",
+        "_recipes.py",
+        "            await gate.cancel()\n            raise",
+        "            await gate.fail()\n            raise",
+    ),
+    (
+        "lockout verifies while locked",
+        "_recipes.py",
+        "        if not gate.allowed:\n            return _attempt_denied(gate)\n",
+        "",
+    ),
+    (
+        "lockout counts successes",
+        "_recipes.py",
+        "        if verified:\n            done = gate.succeed()\n",
+        "        if verified and False:\n            done = gate.succeed()\n",
     ),
     (
         "shorthand accepts plurals",

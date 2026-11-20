@@ -4,17 +4,24 @@ from typing import Any
 
 from omnilimit import (
     AsyncLimiter,
+    AsyncLockout,
+    AsyncLockoutGate,
     AsyncPending,
+    Attempt,
     AsyncStore,
     Cancelled,
     CombinedDecision,
     Decision,
     Limiter,
+    Lockout,
+    LockoutGate,
+    LockoutLimit,
     MemoryStore,
     Pending,
     Reservation,
     Reserved,
     Store,
+    Succeeded,
     peek_all,
     peek_all_async,
     reserve_all,
@@ -49,3 +56,27 @@ async def pending_async(limiter: AsyncLimiter) -> None:
     committed: CombinedDecision = await opened.commit()
     held: AsyncPending = await reserve_all_async([(limiter, "ip", 1)])
     cancelled: Cancelled = await held.cancel()
+
+
+def lockouts(limiter: Limiter, async_limiter: AsyncLimiter) -> None:
+    earlier: Lockout[str] = Lockout(limiter, reset_on_success=False)
+    attempt: Attempt = earlier.attempt("id", lambda: True)
+    every: tuple[Decision, ...] = attempt.decisions
+    by_subject: Lockout[tuple[str, str]] = Lockout(
+        limits=[
+            LockoutLimit(limiter, id_of=lambda s: s[0]),
+            LockoutLimit(limiter, id_of=lambda s: s[1], reset_on_success=False),
+        ],
+        mode="reserve",
+    )
+    gate: LockoutGate = by_subject.begin(("subject", "ip"))
+    succeeded: Succeeded = gate.succeed()
+    resets: tuple[bool | None, ...] = succeeded.resets
+    failed: CombinedDecision = by_subject.begin(("s", "i")).fail()
+    AsyncLockout(async_limiter)
+    AsyncLockout(limits=[LockoutLimit(async_limiter)], mode="advisory")
+
+
+async def async_gate(lockout: AsyncLockout[str]) -> None:
+    gate: AsyncLockoutGate = await lockout.begin("id")
+    cancelled: Cancelled = await gate.cancel()

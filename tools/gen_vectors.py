@@ -755,7 +755,7 @@ class RecipeError(Exception):
 class RecipeModel:
     """The recipes over Meters, one per limiter and id, with a log of every store call."""
 
-    OPS = ("check_all", "peek_all", "reserve_all", "commit", "cancel", "attempt", "check", "peek", "reset", "inspect", "fault", "heal")
+    OPS = ("check_all", "peek_all", "reserve_all", "commit", "cancel", "gate", "fail", "succeed", "attempt", "check", "peek", "reset", "inspect", "fault", "heal")
 
     def __init__(self, limiters: dict, lockouts: dict | None = None) -> None:
         scopes = [cfg["scope"] for cfg in limiters.values()]
@@ -901,14 +901,16 @@ class RecipeModel:
         allowed = decisions[index]["allowed"]
         assert allowed == all(d["allowed"] for d in decisions)
         self.handles[handle] = {
-            "mode": mode, "entries": entries, "allowed": allowed, "governing": index,
+            "kind": "pending", "mode": mode, "entries": entries, "allowed": allowed, "governing": index,
             "decisions": decisions, "held": held, "refunded": refunded, "settled": None, "result": None,
         }
         return {"allowed": allowed, "governing": index, "decisions": decisions, "refunded": refunded}
 
     def settle(self, op: str, handle: str) -> dict:
-        """`commit` or `cancel`, under rule 8: once, repeatable, and the other one refused."""
+        """`commit` or `cancel` of a pending, or `fail`, `succeed` or `cancel` of a gate, under
+        rule 8: once, repeatable, and any other one refused."""
         h = self.handles[handle]
+        assert op in (("commit", "cancel") if h["kind"] == "pending" else ("fail", "succeed", "cancel"))
         if h["settled"] is not None:
             assert self.calls == []
             if h["settled"] != op:
@@ -916,7 +918,26 @@ class RecipeModel:
             return h["result"]
         h["settled"] = op
         own = {"allowed": h["allowed"], "governing": h["governing"], "decisions": h["decisions"]}
-        if op == "commit":
+        n = len(h["decisions"])
+        if op == "fail":
+            if h["mode"] == "peek" and h["allowed"]:
+                # The failure happened: every limit records it, whatever an earlier one says.
+                checks = [self.decide("hit", e["limiter"], e["id"]) for e in h["entries"]]
+                index = governing(checks)
+                result = {"allowed": checks[index]["allowed"], "governing": index, "decisions": checks}
+            else:
+                result = own
+        elif op == "succeed":
+            resets: list[bool | None] = [None] * n
+            refunded: list[bool | None] = [None] * n
+            if h["allowed"]:
+                for i, (limit, e) in enumerate(zip(h["limits"], h["entries"])):
+                    if limit.get("reset_on_success", True):
+                        resets[i] = self.store("reset", e["limiter"], e["id"]) is not None
+                    elif h["mode"] == "reserve":
+                        refunded[i] = self.give_back(h["held"][i])
+            result = {**own, "resets": resets, "refunded": refunded}
+        elif op == "commit":
             if h["mode"] == "peek" and h["allowed"]:
                 counted: list[dict] = []
                 for e in h["entries"]:
@@ -934,9 +955,61 @@ class RecipeModel:
         h["result"] = result
         return result
 
+    def lockout(self, name: str) -> tuple[list[dict], str, bool]:
+        """A lockout's limits, its mode, and whether it is given in the earlier one-limit form."""
+        given = self.lockouts[name]
+        if isinstance(given, list):
+            assert len(given) == 1, "the earlier form takes one limit"
+            return given, "advisory", True
+        return given["limits"], given.get("mode", "advisory"), False
+
+    def open_gate(self, lockout: str, ids: list[str], handle: str) -> dict:
+        limits, mode, _ = self.lockout(lockout)
+        assert len(limits) == len(ids), "one id per limit"
+        entries = [{"limiter": limit["limiter"], "id": who} for limit, who in zip(limits, ids)]
+        result = self.open_pending("peek" if mode == "advisory" else "reserve", handle, entries)
+        self.handles[handle].update({"kind": "gate", "limits": limits})
+        return result
+
+    def gated_attempt(self, lockout: str, ids: list[str], verify: object) -> dict:
+        """An attempt as the sequence of gate and settlement it is defined as."""
+        handle = f"\0attempt-{len(self.handles)}"
+        gate = self.open_gate(lockout, ids, handle)
+        if not gate["allowed"]:
+            return {"allowed": False, "verified": None, "verify_ran": False, "governing": gate["governing"], "decisions": gate["decisions"]}
+        if verify == "raise":
+            self.settle("cancel", handle)
+            raise RecipeError("verify")
+        if verify:
+            done = self.settle("succeed", handle)
+            return {"allowed": True, "verified": True, "verify_ran": True, "governing": done["governing"], "decisions": done["decisions"], "resets": done["resets"]}
+        failed = self.settle("fail", handle)
+        return {"allowed": True, "verified": False, "verify_ran": True, "governing": failed["governing"], "decisions": failed["decisions"]}
+
     def attempt(self, lockout: str, ids: list[str], verify: object) -> dict:
+        _, _, earlier = self.lockout(lockout)
+        if not earlier:
+            return self.gated_attempt(lockout, ids, verify)
+        # Self-check: the earlier form is a one-limit advisory lockout, call for call.
+        twin = copy.deepcopy(self)
+        twin.lockouts = {**twin.lockouts, lockout: {"limits": self.lockouts[lockout]}}
+        try:
+            twin_result: dict | str = twin.gated_attempt(lockout, ids, verify)
+        except RecipeError as error:
+            twin_result = error.kind
+        try:
+            result = self.earlier_attempt(lockout, ids, verify)
+        except RecipeError as error:
+            assert twin_result == error.kind and twin.calls == self.calls
+            raise
+        assert isinstance(twin_result, dict) and twin.calls == self.calls
+        twin_result.pop("resets", None)
+        assert twin_result == result
+        return result
+
+    def earlier_attempt(self, lockout: str, ids: list[str], verify: object) -> dict:
         limits = self.lockouts[lockout]
-        assert len(limits) == len(ids) == 1, "lockouts take one limit in this spec version"
+        assert len(limits) == len(ids) == 1
         (limit,), (who,) = limits, ids
         self.validate([{"limiter": limit["limiter"], "id": who}], peeks=True)
         gate = self.decide("peek", limit["limiter"], who)
@@ -972,8 +1045,10 @@ class RecipeModel:
                 expect["result"] = self.check_all(step["entries"])
             elif op in ("peek_all", "reserve_all"):
                 expect["result"] = self.open_pending(op[: -len("_all")], step["handle"], step["entries"])
-            elif op in ("commit", "cancel"):
+            elif op in ("commit", "cancel", "fail", "succeed"):
                 expect["result"] = self.settle(op, step["handle"])
+            elif op == "gate":
+                expect["result"] = self.open_gate(step["lockout"], step["ids"], step["handle"])
             elif op == "attempt":
                 expect["result"] = self.attempt(step["lockout"], step["ids"], step["verify"])
             elif op == "reset":
@@ -1028,8 +1103,11 @@ def recipes() -> dict[str, dict]:
         step: dict = {"op": "attempt"}
         if at is not None:
             step["at_ms"] = at
-        step.update({"lockout": lockout, "ids": [who], "verify": verify})
+        step.update({"lockout": lockout, "ids": who if isinstance(who, list) else [who], "verify": verify})
         return step
+
+    def gate(handle: str, ids: list[str], lockout: str = "login", at: int | None = None) -> dict:
+        return {"op": "gate", **({"at_ms": at} if at is not None else {}), "lockout": lockout, "ids": ids, "handle": handle}
 
     def fault(name: str, kind: str, on: list[str]) -> dict:
         return {"op": "fault", "limiter": name, "fault": kind, "on": on}
@@ -1309,6 +1387,122 @@ def recipes() -> dict[str, dict]:
             ],
         ),
     })
+    pair = {"subject": lim("subject", 2, 60_000), "ip": lim("ip", 3, 60_000)}
+    advisory = {"login": {"limits": [{"limiter": "subject"}, {"limiter": "ip", "reset_on_success": False}]}}
+    reserve = {"login": {"limits": [{"limiter": "subject"}, {"limiter": "ip", "reset_on_success": False}], "mode": "reserve"}}
+    named.update({
+        "lockout-limits-reset-on-success-each-their-own": (
+            pair,
+            [
+                att(["u", "a"], False, at=b), att(["u", "a"], True),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+                att(["v", "a"], False), att(["v", "a"], True), one("inspect", "ip", "a"),
+            ],
+            advisory,
+        ),
+        "lockout-fail-counts-every-limit-even-after-a-denial": (
+            pair,
+            [
+                gate("g", ["u", "a"], at=b),
+                one("check", "subject", "u"), one("check", "subject", "u"),
+                settle("fail", "g"),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+                settle("fail", "g"), settle("succeed", "g"),
+            ],
+            advisory,
+        ),
+        "lockout-succeed-continues-after-a-failed-reset": (
+            {"subject": lim("subject", 2, 60_000), "ip": lim("ip", 3, 60_000)},
+            [
+                att(["u", "a"], False, at=b),
+                gate("g", ["u", "a"]),
+                fault("subject", "error", ["reset"]),
+                settle("succeed", "g"), settle("succeed", "g"),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+            ],
+            {"login": {"limits": [{"limiter": "subject"}, {"limiter": "ip"}]}},
+        ),
+        "lockout-locked-gate-makes-no-calls": (
+            pair,
+            [
+                att(["u", "a"], False, at=b), att(["u", "a"], False),
+                gate("g", ["u", "a"]), settle("succeed", "g"), settle("fail", "g"), settle("cancel", "g"),
+                gate("h", ["u", "a"]), settle("fail", "h"),
+                att(["u", "a"], True),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+            ],
+            advisory,
+        ),
+        "lockout-reserve-gate-denies-and-compensates": (
+            pair,
+            [
+                one("check", "subject", "u", at=b), one("check", "subject", "u"),
+                gate("g", ["u", "a"]), one("inspect", "ip", "a"),
+                gate("h", ["v", "a"], at=b + 1),
+                one("check", "ip", "a"), one("check", "ip", "a"),
+                gate("i", ["w", "a"]), one("inspect", "subject", "w"),
+                settle("succeed", "i"), settle("cancel", "i"),
+            ],
+            reserve,
+        ),
+        "lockout-reserve-succeed-refunds-the-limits-it-does-not-reset": (
+            pair,
+            [
+                att(["u", "a"], False, at=b),
+                gate("g", ["u", "a"]), one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+                settle("succeed", "g"),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+                att(["u", "a"], True), one("inspect", "ip", "a"),
+            ],
+            reserve,
+        ),
+        "lockout-reserve-fail-makes-no-calls": (
+            pair,
+            [gate("g", ["u", "a"], at=b), settle("fail", "g"), settle("fail", "g"), settle("succeed", "g"), one("inspect", "subject", "u"), one("inspect", "ip", "a")],
+            reserve,
+        ),
+        "lockout-reserve-verify-raises-counts-nothing": (
+            pair,
+            [att(["u", "a"], "raise", at=b), one("inspect", "subject", "u"), one("inspect", "ip", "a"), att(["u", "a"], False), att(["u", "a"], "raise"), one("inspect", "subject", "u")],
+            reserve,
+        ),
+        "lockout-reserve-bounds-the-verifications": (
+            {"subject": lim("subject", 2, 60_000)},
+            [
+                gate("g1", ["u"], at=b), gate("g2", ["u"]), gate("g3", ["u"]),
+                settle("fail", "g1"), gate("g4", ["u"]), settle("succeed", "g2"), gate("g5", ["u"]),
+                one("inspect", "subject", "u"),
+            ],
+            {"login": {"limits": [{"limiter": "subject", "reset_on_success": False}], "mode": "reserve"}},
+        ),
+        "lockout-reserve-failed-refunds-stay-counted": (
+            pair,
+            [
+                gate("g", ["u", "a"], at=b),
+                fault("ip", "error", ["refund"]),
+                settle("succeed", "g"),
+                one("inspect", "ip", "a"),
+                gate("h", ["u", "a"]), settle("cancel", "h"), one("inspect", "subject", "u"),
+            ],
+            reserve,
+        ),
+        "lockout-reserve-needs-limiters-that-refund": (
+            {"subject": lim("subject", 2, 60_000), "edge": lim("edge", 5, 60_000, on="open", tier="approximate")},
+            [att(["u", "a"], False, at=b), gate("g", ["u", "a"]), one("inspect", "subject", "u")],
+            {"login": {"limits": [{"limiter": "subject"}, {"limiter": "edge"}], "mode": "reserve"}},
+        ),
+        "lockout-one-limit-equals-the-earlier-form": (
+            {"old": lim("old", 2, 60_000), "new": lim("new", 2, 60_000)},
+            [
+                att("u", False, "old-form", at=b), att("u", False, "new-form"),
+                att("u", True, "old-form"), att("u", True, "new-form"),
+                att("u", False, "old-form"), att("u", False, "new-form"),
+                att("u", False, "old-form"), att("u", False, "new-form"),
+                att("u", True, "old-form"), att("u", True, "new-form"),
+            ],
+            {"old-form": [{"limiter": "old"}], "new-form": {"limits": [{"limiter": "new"}], "mode": "advisory"}},
+        ),
+    })
     out = {f"recipe/{k}": recipe(f"recipe/{k}", *v) for k, v in named.items()}
 
     rng = random.Random(20261120)
@@ -1404,6 +1598,52 @@ def recipes() -> dict[str, dict]:
             else:
                 timeline.append(one(kind, rng.choice(names), rng.choice("xxy"), at=when))
         out[f"recipe/pending-random-{n:03d}"] = recipe(f"recipe/pending-random-{n:03d}", limiters, timeline)
+
+    # Lockouts of several limits in both modes: attempts, gates settled every way, faults.
+    rng = random.Random(20261122)
+    for n in range(24):
+        limiters = {}
+        for name in ("a", "b", "c")[: rng.randrange(1, 4)]:
+            limit = rng.choice([1, 2, 3, 5])
+            window = rng.choice([1000, 1009, 10_000, 60_000])
+            burst = rng.choice([1, 2, 3, limit, limit + 1])
+            limiters[name] = lim(name, limit, window, burst, on=rng.choice(["open", "closed"]))
+        names = list(limiters)
+        limits = [{"limiter": name, **({"reset_on_success": False} if rng.random() < 0.4 else {})} for name in names]
+        lockouts = {"login": {"limits": limits, "mode": rng.choice(["advisory", "reserve"])}}
+        at = BASE + rng.randrange(1000)
+        timeline = []
+        faulted = set()
+        handles = []
+        for i in range(rng.randrange(12, 30)):
+            dt = rng.choice([0, 0, 0, 1, 17, 333, 1000, 5000])
+            at += dt
+            when = at if (i == 0 or dt) else None
+            kind = rng.choice(["attempt", "attempt", "attempt", "gate", "gate", "settle", "settle", "settle", "check", "reset", "inspect", "fault"])
+            if kind == "settle" and not handles:
+                kind = "gate"
+            ids = [rng.choice("uuv") if j == 0 else rng.choice("aab") for j in range(len(names))]
+            if kind == "fault":
+                if faulted and rng.random() < 0.5:
+                    name = rng.choice(sorted(faulted))
+                    faulted.discard(name)
+                    timeline.append(heal(name))
+                else:
+                    name = rng.choice(names)
+                    faulted.add(name)
+                    timeline.append(fault(name, "error", rng.sample(["peek", "hit", "reset", "refund"], rng.randrange(1, 5))))
+            elif kind == "attempt":
+                timeline.append(att(ids, rng.choice([True, False, False, "raise"]), at=when))
+            elif kind == "gate":
+                handle = f"g{len(handles)}"
+                handles.append(handle)
+                timeline.append(gate(handle, ids, at=when))
+            elif kind == "settle":
+                handle = handles[-1] if rng.random() < 0.6 else rng.choice(handles)
+                timeline.append(settle(rng.choice(["fail", "fail", "succeed", "succeed", "cancel"]), handle, at=when))
+            else:
+                timeline.append(one(kind, rng.choice(names), rng.choice("uvab"), at=when))
+        out[f"recipe/lockout-random-{n:03d}"] = recipe(f"recipe/lockout-random-{n:03d}", limiters, timeline, lockouts)
     return out
 
 

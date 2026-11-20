@@ -22,6 +22,7 @@ from omnilimit import (
     HitParams,
     Limiter,
     Lockout,
+    LockoutLimit,
     RawHit,
     RawRefund,
     Reservation,
@@ -376,15 +377,41 @@ class RecipeHarness:
             )
             self.raw[name] = (inner, policy, key)
         self.handles: dict[str, Any] = {}
+        # The earlier form takes the id as subject; the other one the step's ids, one per limit.
         self.lockouts: dict[str, Any] = {}
-        for name, limits in vector.get("lockouts", {}).items():
-            assert len(limits) == 1, "lockouts take one limit"
-            (limit,) = limits
-            lockout = AsyncLockout if is_async else Lockout
-            self.lockouts[name] = lockout(
-                self.limiters[limit["limiter"]],
-                reset_on_success=limit.get("reset_on_success", True),
-            )
+        self.earlier: set[str] = set()
+        lockout = AsyncLockout if is_async else Lockout
+        for name, given in vector.get("lockouts", {}).items():
+            if isinstance(given, list):
+                assert len(given) == 1, "the earlier form takes one limit"
+                (limit,) = given
+                self.earlier.add(name)
+                self.lockouts[name] = lockout(
+                    self.limiters[limit["limiter"]],
+                    reset_on_success=limit.get("reset_on_success", True),
+                )
+                continue
+            limits = [
+                LockoutLimit(
+                    self.limiters[limit["limiter"]],
+                    id_of=lambda ids, i=i: ids[i],
+                    reset_on_success=limit.get("reset_on_success", True),
+                )
+                for i, limit in enumerate(given["limits"])
+            ]
+            self.lockouts[name] = lockout(limits=limits, mode=given.get("mode", "advisory"))
+
+    def subject(self, step: dict[str, Any]) -> Any:
+        return step["ids"][0] if step["lockout"] in self.earlier else tuple(step["ids"])
+
+    def attempted(self, step: dict[str, Any], attempt: Any, ran: bool) -> dict[str, Any]:
+        result = {"allowed": attempt.allowed, "verified": attempt.verified, "verify_ran": ran}
+        result.update({k: v for k, v in _combined(attempt).items() if k != "allowed"})
+        if attempt.allowed and attempt.verified:
+            assert attempt.resets is not None
+            if step["lockout"] not in self.earlier:
+                result["resets"] = list(attempt.resets)
+        return result
 
     def _log(self, name: str, op: str, key: str, id_of: dict[str, str]) -> str | None:
         """Record a call, and return the armed fault that answers it, if any."""
@@ -486,10 +513,19 @@ class RecipeHarness:
         self.handles[step["handle"]] = pending
         return {**_combined(pending), "refunded": list(pending.refunded)}
 
+    def gated(self, step: dict[str, Any], gate: Any) -> dict[str, Any]:
+        assert gate.mode == self.vector["lockouts"][step["lockout"]].get("mode", "advisory")
+        assert not gate.settled
+        self.handles[step["handle"]] = gate
+        return {**_combined(gate), "refunded": list(gate.refunded)}
+
     def settled(self, step: dict[str, Any], result: Any) -> dict[str, Any]:
         assert self.handles[step["handle"]].settled
         if step["op"] == "cancel":
             return {"refunded": list(result.refunded)}
+        if step["op"] == "succeed":
+            extra = {"resets": list(result.resets), "refunded": list(result.refunded)}
+            return {**_combined(result), **extra}
         return _combined(result)
 
     def inspected(self, step: dict[str, Any], raw: RawHit) -> None:
@@ -505,16 +541,6 @@ class RecipeHarness:
         assert {"calls": self.calls, **got} == step["expect"], (
             f"{self.vector['id']} step {index} ({step['op']})"
         )
-
-
-def _attempt_result(attempt: Any, verify_ran: bool) -> dict[str, Any]:
-    return {
-        "allowed": attempt.allowed,
-        "verified": attempt.verified,
-        "verify_ran": verify_ran,
-        "governing": 0,
-        "decisions": [short_decision(attempt.decision)],
-    }
 
 
 def run_recipe(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> None:
@@ -542,12 +568,14 @@ def run_recipe(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> Non
             elif op in ("peek_all", "reserve_all"):
                 opener = peek_all if op == "peek_all" else reserve_all
                 got["result"] = h.opened(step, opener(h.entries(step)))
-            elif op in ("commit", "cancel"):
+            elif op in ("commit", "cancel", "fail", "succeed"):
                 pending = h.handles[step["handle"]]
                 got["result"] = h.settled(step, getattr(pending, op)())
+            elif op == "gate":
+                got["result"] = h.gated(step, h.lockouts[step["lockout"]].begin(h.subject(step)))
             elif op == "attempt":
-                attempt = h.lockouts[step["lockout"]].attempt(step["ids"][0], verify)
-                got["result"] = _attempt_result(attempt, bool(ran))
+                attempt = h.lockouts[step["lockout"]].attempt(h.subject(step), verify)
+                got["result"] = h.attempted(step, attempt, bool(ran))
             elif op in ("check", "peek"):
                 limiter = h.limiters[step["limiter"]]
                 call = limiter.check if op == "check" else limiter.peek
@@ -587,12 +615,15 @@ async def run_recipe_async(vector: dict[str, Any], store: Any, salt_suffix: str 
             elif op in ("peek_all", "reserve_all"):
                 opener = peek_all_async if op == "peek_all" else reserve_all_async
                 got["result"] = h.opened(step, await opener(h.entries(step)))
-            elif op in ("commit", "cancel"):
+            elif op in ("commit", "cancel", "fail", "succeed"):
                 pending = h.handles[step["handle"]]
                 got["result"] = h.settled(step, await getattr(pending, op)())
+            elif op == "gate":
+                gate = await h.lockouts[step["lockout"]].begin(h.subject(step))
+                got["result"] = h.gated(step, gate)
             elif op == "attempt":
-                attempt = await h.lockouts[step["lockout"]].attempt(step["ids"][0], verify)
-                got["result"] = _attempt_result(attempt, bool(ran))
+                attempt = await h.lockouts[step["lockout"]].attempt(h.subject(step), verify)
+                got["result"] = h.attempted(step, attempt, bool(ran))
             elif op in ("check", "peek"):
                 limiter = h.limiters[step["limiter"]]
                 call = limiter.check if op == "check" else limiter.peek

@@ -556,3 +556,51 @@ describe('createLockout', () => {
     expect((await lockout.attempt('b', () => true)).allowed).toBe(true);
   });
 });
+
+describe('createLockout with several limits', () => {
+  const limits = (mode?: 'advisory' | 'reserve') => {
+    const store = memoryStore();
+    const subject = createLimiter({ store, scope: 'subject', limit: 2, windowMs: 60_000, onStoreError: 'closed' });
+    const ip = createLimiter({ store, scope: 'ip', limit: 3, windowMs: 60_000, onStoreError: 'closed' });
+    const lockout = createLockout<{ name: string; ip: string }>({
+      limits: [
+        { limiter: subject, idOf: (s) => s.name },
+        { limiter: ip, idOf: (s) => s.ip, resetOnSuccess: false },
+      ],
+      ...(mode ? { mode } : {}),
+    });
+    return { subject, ip, lockout };
+  };
+
+  it('counts a failure under every limit and reports each decision', async () => {
+    const { subject, ip, lockout } = limits();
+    const failed = await lockout.attempt({ name: 'u', ip: 'a' }, () => false);
+    expect(failed.decisions.map((d) => d.remaining)).toEqual([1, 2]);
+    const passed = await lockout.attempt({ name: 'u', ip: 'a' }, () => true);
+    expect(passed).toMatchObject({ allowed: true, verified: true, resets: [true, null] });
+    expect((await subject.peek('u')).remaining).toBe(2);
+    expect((await ip.peek('a')).remaining).toBe(2);
+  });
+
+  it('in reserve mode, concurrent gates never run more verifications than the limit has units', async () => {
+    const { lockout } = limits('reserve');
+    const gates = await Promise.all(Array.from({ length: 5 }, () => lockout.begin({ name: 'u', ip: 'a' })));
+    expect(gates.filter((g) => g.allowed)).toHaveLength(2);
+    const [first] = gates;
+    const [one, two] = await Promise.all([first!.succeed(), first!.succeed()]);
+    expect(one).toBe(two);
+    await expect(first!.fail()).rejects.toBeInstanceOf(SettledError);
+  });
+
+  it('refuses what it cannot do before any store call', async () => {
+    const { subject } = limits();
+    expect(() => createLockout({ limits: [] })).toThrow(RangeError);
+    expect(() => createLockout({ limits: [{ limiter: subject }], mode: 'other' as 'reserve' })).toThrow(TypeError);
+    // A subject that is not a string needs idOf: the types say so, and so does the runtime.
+    const loose = createLockout<unknown>({ limits: [{ limiter: subject } as never] });
+    await expect(loose.begin({ name: 'u' })).rejects.toThrow(TypeError);
+    expect((await subject.peek('u')).remaining).toBe(2);
+    const named = createLockout({ limits: [{ limiter: subject }] });
+    expect((await named.begin('u')).allowed).toBe(true);
+  });
+});

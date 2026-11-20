@@ -14,6 +14,7 @@ import {
   SettledError,
   type CombinedDecision,
   type Lockout,
+  type LockoutGate,
   type Pending,
 } from '../../src/core/recipes.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
@@ -222,16 +223,35 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
     raw[name] = { store: inner, params: policy, key };
   }
 
-  const lockouts: Record<string, Lockout> = {};
-  for (const [name, limits] of Object.entries<Vector[]>(vector.lockouts ?? {})) {
-    expect(limits, `${vector.id}: lockouts take one limit`).toHaveLength(1);
-    const [limit] = limits as [Vector];
-    lockouts[name] = createLockout({ limiter: limiters[limit.limiter]!, resetOnSuccess: limit.reset_on_success ?? true });
+  // The earlier form takes the id as subject; the other one takes the step's ids, one per limit.
+  const lockouts: Record<string, { lockout: Lockout<string[]>; earlier: boolean }> = {};
+  for (const [name, given] of Object.entries<Vector>(vector.lockouts ?? {})) {
+    if (Array.isArray(given)) {
+      expect(given, `${vector.id}: the earlier form takes one limit`).toHaveLength(1);
+      const [limit] = given as [Vector];
+      const single = createLockout({ limiter: limiters[limit.limiter]!, resetOnSuccess: limit.reset_on_success ?? true });
+      lockouts[name] = {
+        earlier: true,
+        lockout: { begin: (ids) => single.begin(ids[0]!), attempt: (ids, verify) => single.attempt(ids[0]!, verify) },
+      };
+    } else {
+      const lockout = createLockout<string[]>({
+        limits: given.limits.map((limit: Vector, index: number) => ({
+          limiter: limiters[limit.limiter]!,
+          idOf: (ids: string[]) => ids[index]!,
+          ...(limit.reset_on_success === undefined ? {} : { resetOnSuccess: limit.reset_on_success }),
+        })),
+        ...(given.mode === undefined ? {} : { mode: given.mode }),
+      });
+      lockouts[name] = { earlier: false, lockout };
+    }
   }
 
   const withCost = (cost: number | undefined) => (cost === undefined ? {} : { cost });
   const entriesOf = (step: Vector) => step.entries.map((e: Vector) => ({ limiter: limiters[e.limiter]!, id: e.id, ...withCost(e.cost) }));
   const handles = new Map<string, Pending>();
+  const gates = new Map<string, LockoutGate>();
+  const settledOf = (handle: string) => (handles.get(handle) ?? gates.get(handle))!;
   for (const [index, step] of timeline.entries()) {
     const context = `${vector.id} step ${index} (${step.op})`;
     if (step.at_ms !== undefined) now = step.at_ms;
@@ -272,22 +292,39 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
           expect(handles.get(step.handle)!.settled, context).toBe(true);
           break;
         case 'cancel':
-          got['result'] = await handles.get(step.handle)!.cancel();
-          expect(handles.get(step.handle)!.settled, context).toBe(true);
+          got['result'] = await settledOf(step.handle).cancel();
+          expect(settledOf(step.handle).settled, context).toBe(true);
           break;
+        case 'gate': {
+          const opened = await lockouts[step.lockout]!.lockout.begin(step.ids);
+          expect(opened.settled, context).toBe(false);
+          gates.set(step.handle, opened);
+          got['result'] = { ...combined(opened), refunded: opened.refunded };
+          break;
+        }
+        case 'fail':
+          got['result'] = combined(await gates.get(step.handle)!.fail());
+          expect(gates.get(step.handle)!.settled, context).toBe(true);
+          break;
+        case 'succeed': {
+          const done = await gates.get(step.handle)!.succeed();
+          got['result'] = { ...combined(done), resets: done.resets, refunded: done.refunded };
+          expect(gates.get(step.handle)!.settled, context).toBe(true);
+          break;
+        }
         case 'attempt': {
-          const attempt = await lockouts[step.lockout]!.attempt(step.ids[0], () => {
+          const { lockout, earlier } = lockouts[step.lockout]!;
+          const attempt = await lockout.attempt(step.ids, () => {
             verifyRan = true;
             if (step.verify === 'raise') throw fromVerify;
             return step.verify;
           });
-          got['result'] = {
-            allowed: attempt.allowed,
-            verified: attempt.verified,
-            verify_ran: verifyRan,
-            governing: 0,
-            decisions: [shortDecision(attempt.decision)],
-          };
+          const { governing, decisions } = combined(attempt);
+          got['result'] = { allowed: attempt.allowed, verified: attempt.verified, verify_ran: verifyRan, governing, decisions };
+          if (attempt.allowed && attempt.verified) {
+            expect(attempt.resets, context).toBeDefined();
+            if (!earlier) got['result'] = { ...(got['result'] as object), resets: attempt.resets };
+          }
           break;
         }
         case 'check':

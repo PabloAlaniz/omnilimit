@@ -99,36 +99,30 @@ function fewestLeft(decisions: Decision[]): Decision {
 }
 
 /** Rule 8: one settlement, marked before its first store call; the same one again shares it. */
-function pending(
-  mode: Pending['mode'],
-  own: CombinedDecision,
-  refunded: (boolean | null)[],
-  onCommit: () => Promise<CombinedDecision>,
-  onCancel: () => Promise<Cancelled>,
-): Pending {
-  let settledBy: 'commit' | 'cancel' | null = null;
-  let outcome: Promise<CombinedDecision | Cancelled> | undefined;
-  const settle = (op: 'commit' | 'cancel', work: () => Promise<CombinedDecision | Cancelled>) => {
-    if (settledBy === null) {
-      settledBy = op;
-      outcome = work();
-    } else if (settledBy !== op) {
-      return Promise.reject(new SettledError(`omnilimit: this pending check was already settled by ${settledBy}`));
-    }
-    return outcome as Promise<CombinedDecision | Cancelled>;
-  };
+function settlement<Op extends string>(what: string) {
+  let settledBy: Op | null = null;
+  let outcome: Promise<unknown> | undefined;
   return {
-    mode,
-    allowed: own.allowed,
-    decision: own.decision,
-    decisions: own.decisions,
-    refunded,
     get settled() {
       return settledBy !== null;
     },
-    commit: () => settle('commit', onCommit) as Promise<CombinedDecision>,
-    cancel: () => settle('cancel', onCancel) as Promise<Cancelled>,
+    settle<T>(op: Op, work: () => Promise<T>): Promise<T> {
+      if (settledBy === null) {
+        settledBy = op;
+        outcome = work();
+      } else if (settledBy !== op) {
+        return Promise.reject(new SettledError(`omnilimit: this ${what} was already settled by ${settledBy}`));
+      }
+      return outcome as Promise<T>;
+    },
   };
+}
+
+/** What opening a combined check found: its own result, what it gave back, and what it holds. */
+interface Opened {
+  own: CombinedDecision;
+  refunded: (boolean | null)[];
+  held: (Reservation | null)[];
 }
 
 async function countAll(entries: readonly LimitEntry[]): Promise<CombinedDecision> {
@@ -149,23 +143,53 @@ async function refundEach(entries: readonly LimitEntry[], held: (Reservation | n
   return refunded;
 }
 
-async function openPeek(recipe: string, entries: readonly LimitEntry[]): Promise<Pending> {
+/** Rule 3 over a list where any decision may be denied. */
+function governing(decisions: Decision[]): CombinedDecision {
+  const refused = decisions.filter((decision) => !decision.allowed);
+  return refused.length > 0
+    ? { allowed: false, decision: longestWait(refused), decisions }
+    : { allowed: true, decision: fewestLeft(decisions), decisions };
+}
+
+async function peekEach(recipe: string, entries: readonly LimitEntry[]): Promise<Opened> {
   validate(recipe, entries, 'peek');
   const peeks: Decision[] = [];
   for (const { limiter, id, cost } of entries) peeks.push(await limiter.peek(id, options(cost)));
-  const refused = peeks.filter((decision) => !decision.allowed);
-  const own: CombinedDecision =
-    refused.length > 0
-      ? { allowed: false, decision: longestWait(refused), decisions: peeks }
-      : { allowed: true, decision: fewestLeft(peeks), decisions: peeks };
-  const nothing = () => peeks.map(() => null);
-  return pending(
-    'peek',
-    own,
-    nothing(),
-    async () => (own.allowed ? countAll(entries) : own),
-    async () => ({ refunded: nothing() }),
-  );
+  const nothing = peeks.map(() => null);
+  return { own: governing(peeks), refunded: nothing, held: nothing };
+}
+
+async function reserveEach(recipe: string, entries: readonly LimitEntry[]): Promise<Opened> {
+  validate(recipe, entries, 'reserve');
+  const decisions: Decision[] = [];
+  const held: (Reservation | null)[] = [];
+  for (const { limiter, id, cost } of entries) {
+    const { decision, reservation } = await limiter.reserve(id, options(cost));
+    decisions.push(decision);
+    held.push(reservation);
+    if (!decision.allowed) {
+      // Give back what was counted before the denial, in entry order. The denial holds nothing.
+      const refunded = await refundEach(entries, held);
+      return { own: { allowed: false, decision, decisions }, refunded, held: decisions.map(() => null) };
+    }
+  }
+  return { own: { allowed: true, decision: fewestLeft(decisions), decisions }, refunded: decisions.map(() => null), held };
+}
+
+function pending(mode: Pending['mode'], entries: readonly LimitEntry[], { own, refunded, held }: Opened): Pending {
+  const once = settlement<'commit' | 'cancel'>('pending check');
+  return {
+    mode,
+    allowed: own.allowed,
+    decision: own.decision,
+    decisions: own.decisions,
+    refunded,
+    get settled() {
+      return once.settled;
+    },
+    commit: () => once.settle('commit', async () => (mode === 'peek' && own.allowed ? countAll(entries) : own)),
+    cancel: () => once.settle('cancel', async () => ({ refunded: own.allowed ? await refundEach(entries, held) : [...refunded] })),
+  };
 }
 
 /**
@@ -178,8 +202,8 @@ async function openPeek(recipe: string, entries: readonly LimitEntry[]): Promise
  * Before any store call, throws a `RangeError` for an empty list or a cost a limit does not
  * accept, and a `TypeError` for a limiter of tier `approximate`.
  */
-export function peekAll(entries: readonly LimitEntry[]): Promise<Pending> {
-  return openPeek('peekAll', entries);
+export async function peekAll(entries: readonly LimitEntry[]): Promise<Pending> {
+  return pending('peek', entries, await peekEach('peekAll', entries));
 }
 
 /**
@@ -193,28 +217,7 @@ export function peekAll(entries: readonly LimitEntry[]): Promise<Pending> {
  * accept, and a `TypeError` for a limiter whose store cannot refund, such as tier `approximate`.
  */
 export async function reserveAll(entries: readonly LimitEntry[]): Promise<Pending> {
-  validate('reserveAll', entries, 'reserve');
-  const decisions: Decision[] = [];
-  const held: (Reservation | null)[] = [];
-  for (const { limiter, id, cost } of entries) {
-    const { decision, reservation } = await limiter.reserve(id, options(cost));
-    decisions.push(decision);
-    held.push(reservation);
-    if (!decision.allowed) {
-      // Give back what was counted before the denial, in entry order. The denial holds nothing.
-      const refunded = await refundEach(entries, held);
-      const own: CombinedDecision = { allowed: false, decision, decisions };
-      return pending('reserve', own, refunded, async () => own, async () => ({ refunded: [...refunded] }));
-    }
-  }
-  const own: CombinedDecision = { allowed: true, decision: fewestLeft(decisions), decisions };
-  return pending(
-    'reserve',
-    own,
-    decisions.map(() => null),
-    async () => own,
-    async () => ({ refunded: await refundEach(entries, held) }),
-  );
+  return pending('reserve', entries, await reserveEach('reserveAll', entries));
 }
 
 /**
@@ -230,9 +233,10 @@ export async function reserveAll(entries: readonly LimitEntry[]): Promise<Pendin
  * accept, and a `TypeError` for a limiter of tier `approximate`.
  */
 export async function checkAll(entries: readonly LimitEntry[]): Promise<CombinedDecision> {
-  return (await openPeek('checkAll', entries)).commit();
+  return pending('peek', entries, await peekEach('checkAll', entries)).commit();
 }
 
+/** The one-limit form of earlier versions: an advisory lockout with the id as subject. */
 export interface LockoutOptions {
   /** Counts the failed attempts. Its policy is how many failures are tolerated, and how fast they come back. */
   limiter: Limiter;
@@ -240,38 +244,171 @@ export interface LockoutOptions {
   resetOnSuccess?: boolean;
 }
 
-export type Attempt =
-  /** Too many failures: `verify` was not called. Answer with `decision`. */
-  | { allowed: false; verified: null; decision: Decision }
-  /** `verify` ran. On failure, `decision` is the one that counted it. */
-  | { allowed: true; verified: boolean; decision: Decision };
+/** One limit of a lockout. `idOf` may be left out only when the subject is a string, its own id. */
+export type LockoutLimit<S = string> = {
+  /** Counts the failed attempts under this limit. */
+  limiter: Limiter;
+  /** Forget this limit's failures after a success. Defaults to `true`. */
+  resetOnSuccess?: boolean;
+} & (S extends string ? { idOf?: (subject: S) => string } : { idOf: (subject: S) => string });
 
-export interface Lockout {
+/** A lockout over several limits, such as per subject and per IP. */
+export interface MultiLockoutOptions<S = string> {
+  limits: readonly LockoutLimit<S>[];
   /**
-   * Run `verify` unless `id` has failed too often. A false result counts as a failure, a true
-   * one clears the count. If `verify` throws, nothing is counted and the error is yours.
-   * Throws a `TypeError`, before any store call, if the limiter is of tier `approximate`.
+   * `advisory` (the default) peeks before the verification and counts a failure after it: under
+   * concurrency, more verifications than the limits allow can run. `reserve` counts before the
+   * verification and gives back on success: never more verifications in flight than the limits
+   * have units. Prefer `reserve` for credential checks.
    */
-  attempt(id: string, verify: () => boolean | Promise<boolean>): Promise<Attempt>;
+  mode?: 'advisory' | 'reserve';
+}
+
+/** What a gate's `succeed` answers: the gate's own result, with what it reset and refunded, one value per limit. */
+export interface Succeeded extends CombinedDecision {
+  /** `true` reset, `false` the reset failed, `null` this limit does not reset on success. */
+  resets: (boolean | null)[];
+  /** `true` refunded, `false` the refund failed, `null` nothing to refund (and always in advisory mode). */
+  refunded: (boolean | null)[];
 }
 
 /**
- * A limit that counts only failed attempts, as a login does: while the budget of failures is
- * spent, even a correct attempt is refused without being checked, which is what makes guessing
- * useless. See "Recipes" in the spec.
+ * One attempt in front of a lockout. Run the verification only when `allowed`, then settle the
+ * gate once: `fail()`, `succeed()`, or `cancel()` when the verification could not tell. On a
+ * denied gate all three make no store call, so a correct guess cannot open a locked gate. See
+ * "Lockout" in the spec.
  */
-export function createLockout(options: LockoutOptions): Lockout {
-  const { limiter, resetOnSuccess = true } = options;
-  return {
-    async attempt(id, verify) {
-      validate('a lockout', [{ limiter, id }], 'peek');
-      const gate = await limiter.peek(id);
-      if (!gate.allowed) return { allowed: false, verified: null, decision: gate };
-      if (await verify()) {
-        if (resetOnSuccess) await limiter.reset(id);
-        return { allowed: true, verified: true, decision: gate };
+export interface LockoutGate {
+  readonly mode: 'advisory' | 'reserve';
+  readonly allowed: boolean;
+  /** The governing decision of the gate: when denied, the one to answer with. */
+  readonly decision: Decision;
+  readonly decisions: Decision[];
+  /** In reserve mode, what a denied gate gave back, as in `Pending`. */
+  readonly refunded: (boolean | null)[];
+  readonly settled: boolean;
+  /**
+   * The verification failed. Advisory: counts the failure under every limit, in order, without
+   * stopping at a denial. Reserve: the gate already counted it, so no store call.
+   */
+  fail(): Promise<CombinedDecision>;
+  /** The verification passed: resets the limits that reset on success, and in reserve mode refunds the others. */
+  succeed(): Promise<Succeeded>;
+  /** The verification could not tell (it threw): counts nothing, refunding in reserve mode. */
+  cancel(): Promise<Cancelled>;
+}
+
+export type Attempt =
+  /** Too many failures: `verify` was not called. Answer with `decision`. */
+  | { allowed: false; verified: null; decision: Decision; decisions: Decision[] }
+  /**
+   * `verify` ran. On failure, `decision` is the one that counted it. After a success, `resets`
+   * says which limits were reset.
+   */
+  | { allowed: true; verified: boolean; decision: Decision; decisions: Decision[]; resets?: (boolean | null)[] };
+
+export interface Lockout<S = string> {
+  /**
+   * Open a gate for `subject`. Throws, before any store call, a `TypeError` if a limiter is of
+   * tier `approximate`, or cannot refund in reserve mode, or if a limit has no `idOf` and the
+   * subject is not a string.
+   */
+  begin(subject: S): Promise<LockoutGate>;
+  /**
+   * Run `verify` unless `subject` has failed too often. A false result counts as a failure, a true
+   * one clears the limits that reset on success. If `verify` throws, nothing is counted and the
+   * error is yours. Throws as `begin` does.
+   */
+  attempt(subject: S, verify: () => boolean | Promise<boolean>): Promise<Attempt>;
+}
+
+function gate(mode: LockoutGate['mode'], entries: LimitEntry[], resetting: boolean[], opened: Opened): LockoutGate {
+  const { own, refunded, held } = opened;
+  const once = settlement<'fail' | 'succeed' | 'cancel'>('lockout gate');
+  const nothing = () => own.decisions.map(() => null);
+  const fail = async (): Promise<CombinedDecision> => {
+    if (mode === 'reserve' || !own.allowed) return own;
+    // The failure happened: every limit records it, whatever an earlier one answers.
+    const checks: Decision[] = [];
+    for (const { limiter, id } of entries) checks.push(await limiter.check(id));
+    return governing(checks);
+  };
+  const succeed = async (): Promise<Succeeded> => {
+    const resets: (boolean | null)[] = nothing();
+    const given: (boolean | null)[] = nothing();
+    if (own.allowed) {
+      for (const [index, { limiter, id }] of entries.entries()) {
+        if (resetting[index]) resets[index] = await limiter.reset(id);
+        else if (mode === 'reserve') given[index] = held[index] === null ? null : await limiter.refund(held[index] as Reservation);
       }
-      return { allowed: true, verified: false, decision: await limiter.check(id) };
+    }
+    return { ...own, resets, refunded: given };
+  };
+  // Nothing is counted for an attempt that could not tell: in reserve mode, give it all back.
+  const cancel = async (): Promise<Cancelled> => ({ refunded: own.allowed ? await refundEach(entries, held) : [...refunded] });
+  return {
+    mode,
+    allowed: own.allowed,
+    decision: own.decision,
+    decisions: own.decisions,
+    refunded,
+    get settled() {
+      return once.settled;
+    },
+    fail: () => once.settle('fail', fail),
+    succeed: () => once.settle('succeed', succeed),
+    cancel: () => once.settle('cancel', cancel),
+  };
+}
+
+/**
+ * A limit that counts only failed attempts, as a sign-in does: while the budget of failures is
+ * spent, even a correct attempt is refused without being checked, which is what makes guessing
+ * useless. Given one `limiter`, it is the advisory one-limit lockout of earlier versions. Given
+ * `limits`, it counts each failure under every limit, such as per subject and per IP, with the id
+ * each one's `idOf` takes from the subject. See "Lockout" in the spec.
+ */
+export function createLockout(options: LockoutOptions): Lockout<string>;
+export function createLockout<S = string>(options: MultiLockoutOptions<S>): Lockout<S>;
+export function createLockout<S = string>(options: LockoutOptions | MultiLockoutOptions<S>): Lockout<S> {
+  const multi = 'limits' in options;
+  const limits: readonly LockoutLimit<S>[] = multi
+    ? options.limits
+    : [{ limiter: options.limiter, resetOnSuccess: options.resetOnSuccess } as LockoutLimit<S>];
+  const mode = multi ? (options.mode ?? 'advisory') : 'advisory';
+  if (limits.length === 0) throw new RangeError('omnilimit: a lockout needs at least one limit');
+  if (mode !== 'advisory' && mode !== 'reserve') throw new TypeError("omnilimit: a lockout's mode is 'advisory' or 'reserve'");
+  const resetting = limits.map((limit) => limit.resetOnSuccess ?? true);
+
+  const begin = async (subject: S): Promise<LockoutGate> => {
+    const entries = limits.map(({ limiter, idOf }) => {
+      if (idOf) return { limiter, id: idOf(subject) };
+      if (typeof subject !== 'string') throw new TypeError('omnilimit: a lockout limit needs idOf when the subject is not a string');
+      return { limiter, id: subject };
+    });
+    const opened = mode === 'reserve' ? await reserveEach('a lockout', entries) : await peekEach('a lockout', entries);
+    return gate(mode, entries, resetting, opened);
+  };
+
+  return {
+    begin,
+    async attempt(subject, verify) {
+      const opened = await begin(subject);
+      if (!opened.allowed) return { allowed: false, verified: null, decision: opened.decision, decisions: opened.decisions };
+      let verified: boolean;
+      try {
+        verified = await verify();
+      } catch (error) {
+        // Nothing is counted for an attempt that could not tell.
+        await opened.cancel();
+        throw error;
+      }
+      if (verified) {
+        const { decision, decisions, resets } = await opened.succeed();
+        return { allowed: true, verified: true, decision, decisions, resets };
+      }
+      const { decision, decisions } = await opened.fail();
+      return { allowed: true, verified: false, decision, decisions };
     },
   };
 }

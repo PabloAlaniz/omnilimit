@@ -15,6 +15,7 @@ from omnilimit import (
     HitParams,
     Limiter,
     Lockout,
+    LockoutLimit,
     MemoryStore,
     RawHit,
     SettledError,
@@ -409,3 +410,88 @@ class OldAsync:
 
     async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
         raise AssertionError("validation comes first")
+
+
+def _two_limits(kind: Any = Limiter) -> tuple[Any, Any, Any]:
+    store = MemoryStore()
+    subject = kind(store=store, scope="subject", limit=2, window_ms=60_000, on_store_error="closed")
+    ip = kind(store=store, scope="ip", limit=3, window_ms=60_000, on_store_error="closed")
+    limits = [
+        LockoutLimit(subject, id_of=lambda s: s["name"]),
+        LockoutLimit(ip, id_of=lambda s: s["ip"], reset_on_success=False),
+    ]
+    return subject, ip, limits
+
+
+def test_lockout_of_several_limits() -> None:
+    subject, ip, limits = _two_limits()
+    lockout: Lockout[dict[str, str]] = Lockout(limits=limits)
+    failed = lockout.attempt({"name": "u", "ip": "a"}, lambda: False)
+    assert [d.remaining for d in failed.decisions] == [1, 2]
+    passed = lockout.attempt({"name": "u", "ip": "a"}, lambda: True)
+    assert (passed.verified, passed.resets) == (True, (True, None))
+    assert subject.peek("u").remaining == 2
+    assert ip.peek("a").remaining == 2
+
+
+def test_lockout_in_reserve_mode_bounds_concurrent_gates() -> None:
+    _, _, limits = _two_limits()
+    lockout: Lockout[dict[str, str]] = Lockout(limits=limits, mode="reserve")
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        gates = list(pool.map(lambda _: lockout.begin({"name": "u", "ip": "a"}), range(5)))
+    opened = [gate for gate in gates if gate.allowed]
+    assert len(opened) == 2
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.map(lambda _: opened[0].succeed(), range(2))
+    assert first is second
+    assert first.refunded == (None, True)
+    with pytest.raises(SettledError):
+        opened[0].fail()
+
+
+def test_lockout_refuses_what_it_cannot_do() -> None:
+    subject, _, _ = _two_limits()
+    with pytest.raises(ValueError, match="at least one"):
+        Lockout(limits=[])
+    with pytest.raises(ValueError, match="mode"):
+        Lockout(limits=[LockoutLimit(subject)], mode="other")  # type: ignore[call-overload]
+    with pytest.raises(TypeError, match="not both"):
+        Lockout(subject, limits=[LockoutLimit(subject)])  # type: ignore[call-overload]
+    loose: Lockout[object] = Lockout(limits=[LockoutLimit(subject)])
+    with pytest.raises(TypeError, match="id_of"):
+        loose.begin(42)
+    assert subject.peek("42").remaining == 2
+
+
+def test_async_lockout_of_several_limits() -> None:
+    async def run() -> None:
+        subject, ip, limits = _two_limits(AsyncLimiter)
+        lockout: AsyncLockout[dict[str, str]] = AsyncLockout(limits=limits, mode="reserve")
+        who = {"name": "u", "ip": "a"}
+
+        async def boom() -> bool:
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await lockout.attempt(who, boom)
+        assert (await ip.peek("a")).remaining == 3
+        failed = await lockout.attempt(who, lambda: False)
+        assert [d.remaining for d in failed.decisions] == [1, 2]
+        gate = await lockout.begin(who)
+        first, second = await asyncio.gather(gate.succeed(), gate.succeed())
+        assert first is second
+        assert first.resets == (True, None)
+        assert (await subject.peek("u")).remaining == 2
+        locked = await lockout.begin(who)
+        await lockout.begin(who)
+        third = await lockout.begin(who)
+        assert not third.allowed
+        assert (await third.cancel()).refunded == third.refunded
+        assert (await locked.cancel()).refunded == (True, True)
+        advisory: AsyncLockout[dict[str, str]] = AsyncLockout(limits=limits)
+        opened = await advisory.begin(who)
+        assert (await opened.fail()).decisions[0].remaining == 0
+        with pytest.raises(SettledError):
+            await opened.cancel()
+
+    asyncio.run(run())

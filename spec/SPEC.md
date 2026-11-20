@@ -93,7 +93,7 @@ follows is still the authority. It neither extends a bucket's expiry nor refresh
 missing bucket is not an error. A reset that fails or times out is reported as such, and does
 not follow `open`/`closed`: no request is being decided.
 
-Together they express a limit that counts only failures, such as a login lockout: peek before
+Together they express a limit that counts only failures, such as a lockout: peek before
 the work and refuse when denied, hit when the work fails, reset when it succeeds.
 
 Sequence vectors mark these steps with `op: "peek"` or `op: "reset"`; a step without `op` is a
@@ -244,17 +244,42 @@ same result.
 
 ### Lockout
 
-A lockout counts only failed attempts against one limiter, for an id and a verification:
+A lockout counts only failed attempts, for a subject, against one or more limits. Each limit is a
+limiter, the function that gives the subject's id under it (the subject itself by default, when
+it is a string), and whether a success resets it (default yes). A lockout runs in `advisory` mode
+(the default) or in `reserve` mode. Each attempt opens a gate, the caller runs the verification
+only if the gate is allowed, and then settles the gate: `fail` when the verification failed,
+`succeed` when it passed, `cancel` when it could not tell (it raised).
 
-1. Peek the id. If denied, the verification does not run: the result is not allowed, with that
-   denial.
-2. Run the verification. If it raises, nothing else is called and the error reaches the caller
-   unchanged.
-3. If it returns true, reset the id, unless told not to. The result is allowed and verified,
-   with the peek's decision.
-4. If it returns false, check the id. The result is allowed and not verified, with the check's
-   decision. That decision is allowed unless a concurrent attempt took the last unit or the
-   store failed `closed`.
+1. The gate. In advisory mode, peek every limit with cost 1, as `peekAll` does. In reserve mode,
+   reserve every limit with cost 1, as `reserveAll` does, refunding the earlier ones when one
+   denies. Rule 7 applies to each mode as to those. The gate reports `allowed`, the governing
+   `decision`, the `decisions` and `refunded`, like a pending check.
+2. A denied gate. The verification must not run. `fail`, `succeed` and `cancel` make no store
+   call and answer with the gate's own result (a success's `resets` and `refunded` all `null`,
+   a cancel's `refunded` the gate's), so a correct guess cannot open a locked gate.
+3. `fail` on an allowed gate. In advisory mode, check every limit, in order, without stopping
+   at a denial: the failure happened, so every limit records it. The result's decisions are all
+   the checks and the governing decision follows rule 3. In reserve mode the gate already
+   counted the failure: no store call, and the result is the gate's own.
+4. `succeed` on an allowed gate. For each limit, in order: reset it if it resets on success; in
+   reserve mode, refund the reservation of every other limit. The result is the gate's own,
+   with `resets` and `refunded`, one value per limit: `true` when done, `false` when the store
+   failed (which does not stop the others), and `null` when nothing was to be done.
+5. `cancel` makes no store call in advisory mode, and refunds every reservation in reserve mode,
+   reporting `refunded` as a pending's `cancel` does: the attempt counts nothing.
+6. A gate settles once, by rule 8 over `fail`, `succeed` and `cancel`. A gate never settled
+   counts nothing in advisory mode, and stays counted as a failure in reserve mode.
+
+`attempt` is the usual sequence: open the gate; if it is denied, the result is not allowed, the
+verification did not run, and the decisions are the gate's. Otherwise run the verification. If
+it raises, cancel the gate and let the error reach the caller unchanged. If it returns true,
+succeed: the result is allowed and verified, with the gate's decisions and the `resets`. If it
+returns false, fail: the result is allowed and not verified, with the decisions of the failure.
+
+A lockout given one limiter, as in earlier versions, is a lockout of that one limit in advisory
+mode, with the id as subject. Its store calls are the same as before: peek; then reset on success,
+or check on failure.
 
 ### What recipes do not promise
 
@@ -269,9 +294,15 @@ A lockout counts only failed attempts against one limiter, for an id and a verif
 - Refunds across your own reset. A reservation refunded after you reset its bucket can take back
   units counted after the reset, as described under Refund. Do not reset what a pending in
   reserve mode still holds.
-- A bound on verifications. Attempts that overlap can all pass the peek before any of them is
-  counted, so a lockout can run the verification more than `burst` times. Each unit freed lets
-  through about the attacker's rate times the time between peek and check.
+- A bound on verifications in advisory mode. Attempts that overlap can all pass the peek before
+  any of them is counted, so an advisory lockout can run the verification more than `burst`
+  times. Each unit freed lets through about the attacker's rate times the time between the peek
+  and the failure being counted.
+- Atomicity in reserve mode, which bounds verifications instead: every verification runs on a
+  unit already counted, so no more verifications are in flight than the limits have units, under
+  any concurrency, and a window admits no more than the limit's own rate. The bound holds up to
+  the compensation round trip described above, and only by denying more. Prefer reserve mode for
+  credential checks.
 
 ### Recipe vectors
 
@@ -284,7 +315,10 @@ until `heal`. `expect.calls` is every store call the step made, in order, as `pe
 `allowed`, the index of the `governing` decision and the `decisions`; a pending adds `refunded`,
 and an attempt's adds `verified` and `verify_ran`, with its one decision as `decisions[0]`.
 `peek_all` and `reserve_all` open a pending under the name in `handle`, and `commit` and `cancel`
-settle the pending of that name; a cancel's result is `{refunded}`. `error` names the kind
+settle the pending of that name; a cancel's result is `{refunded}`. A lockout is given as a list
+with one limit, the earlier form, or as `{limits, mode}`. `gate` opens a lockout's gate for `ids`,
+one id per limit, under a `handle`, and `fail`, `succeed` and `cancel` settle it; a success adds
+`resets` and `refunded`, as does an attempt that verified on a lockout given as `{limits, mode}`. `error` names the kind
 raised: `value`, `type`, `state` for a settlement rule 8 refuses, or `verify` for the
 verification's own error.
 
