@@ -23,6 +23,8 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from support import (
     run_concurrency,
     run_concurrency_async,
+    run_recipe,
+    run_recipe_async,
     run_sequence,
     run_sequence_async,
     vectors_of,
@@ -41,8 +43,10 @@ if os.environ.get("OMNILIMIT_REQUIRE_STORES") and not (REDIS_URLS and POSTGRES_U
 
 SEQUENCES = [v for v in vectors_of("sequence") if "exact" in v["tiers"]]
 CONCURRENCY = vectors_of("concurrency")
+RECIPES = [v for v in vectors_of("recipe") if "exact" in v["tiers"]]
 sequences = pytest.mark.parametrize("vector", SEQUENCES, ids=lambda v: v["id"])
 concurrency = pytest.mark.parametrize("vector", CONCURRENCY, ids=lambda v: v["id"])
+recipes = pytest.mark.parametrize("vector", RECIPES, ids=lambda v: v["id"])
 PARAMS = HitParams(limit=1, window_ms=5000, capacity=5000, drain_ms=5000)
 SMOKE: dict[str, Any] = {"limit": 2, "window_ms": 1000, "burst": 2, "on_store_error": "closed"}
 
@@ -101,6 +105,11 @@ def test_redis_sequence(sync_redis: Any, vector: dict[str, Any]) -> None:
 @concurrency
 def test_redis_concurrency(sync_redis: Any, vector: dict[str, Any]) -> None:
     run_concurrency(vector, RedisStore(sync_redis), suffix())
+
+
+@recipes
+def test_redis_recipe(sync_redis: Any, vector: dict[str, Any]) -> None:
+    run_recipe(vector, RedisStore(sync_redis), suffix())
 
 
 def test_redis_real_clock(sync_redis: Any) -> None:
@@ -228,6 +237,18 @@ def test_async_redis_concurrency(async_redis_factory: Any, vector: dict[str, Any
     asyncio.run(run())
 
 
+@recipes
+def test_async_redis_recipe(async_redis_factory: Any, vector: dict[str, Any]) -> None:
+    async def run() -> None:
+        client = async_redis_factory()
+        try:
+            await run_recipe_async(vector, AsyncRedisStore(client), suffix())
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
 def test_async_redis_real_clock_and_noscript(async_redis_factory: Any) -> None:
     async def run() -> None:
         client = async_redis_factory()
@@ -272,6 +293,11 @@ def test_postgres_sequence(pg_pool: ConnectionPool, vector: dict[str, Any]) -> N
 @concurrency
 def test_postgres_concurrency(pg_pool: ConnectionPool, vector: dict[str, Any]) -> None:
     run_concurrency(vector, PostgresStore(pg_pool), suffix())
+
+
+@recipes
+def test_postgres_recipe(pg_pool: ConnectionPool, vector: dict[str, Any]) -> None:
+    run_recipe(vector, PostgresStore(pg_pool), suffix())
 
 
 def test_postgres_real_clock(pg_pool: ConnectionPool) -> None:
@@ -406,6 +432,18 @@ def test_async_postgres_concurrency(pg_url: str, vector: dict[str, Any]) -> None
         pool = await _async_pool(pg_url)
         try:
             await run_concurrency_async(vector, AsyncPostgresStore(pool), suffix())
+        finally:
+            await pool.close()
+
+    asyncio.run(run())
+
+
+@recipes
+def test_async_postgres_recipe(pg_url: str, vector: dict[str, Any]) -> None:
+    async def run() -> None:
+        pool = await _async_pool(pg_url)
+        try:
+            await run_recipe_async(vector, AsyncPostgresStore(pool), suffix())
         finally:
             await pool.close()
 

@@ -9,13 +9,14 @@ import { createLimiter } from '../../src/core/limiter.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
 import { canonicalIp, maskIp, resolveClientIp } from '../../src/ip/index.js';
 import type { Store } from '../../src/core/types.js';
-import { allVectors, runConcurrency, runSequence, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
+import { allVectors, runConcurrency, runRecipe, runSequence, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
 
 describe('vector files', () => {
   it('cover every kind', () => {
     const kinds = new Set(allVectors.map((vector) => vector.kind));
-    expect([...kinds].sort()).toEqual(['concurrency', 'contract', 'failure', 'ip', 'key', 'sequence']);
+    expect([...kinds].sort()).toEqual(['concurrency', 'contract', 'failure', 'ip', 'key', 'recipe', 'sequence']);
     expect(vectorsOf('sequence').length).toBeGreaterThanOrEqual(50);
+    expect(vectorsOf('recipe').length).toBeGreaterThanOrEqual(30);
   });
 
   it('match the schema', () => {
@@ -30,6 +31,12 @@ describe('vector files', () => {
 describe('sequence vectors on the memory store', () => {
   it.each(vectorsOf('sequence').map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
     await runSequence(vector, memoryStore());
+  });
+});
+
+describe('recipe vectors on the memory store', () => {
+  it.each(vectorsOf('recipe').map((v): [string, Vector] => [v.id, v]))('%s', async (_id, vector) => {
+    await runRecipe(vector, memoryStore());
   });
 });
 

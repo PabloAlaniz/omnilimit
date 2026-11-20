@@ -1,0 +1,324 @@
+{
+ "spec": "1",
+ "id": "recipe/lockout-store-failures",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "closed": {
+   "scope": "closed",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "closed"
+  },
+  "open": {
+   "scope": "open",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "open"
+  }
+ },
+ "lockouts": {
+  "closed-login": [
+   {
+    "limiter": "closed"
+   }
+  ],
+  "open-login": [
+   {
+    "limiter": "open"
+   }
+  ]
+ },
+ "timeline": [
+  {
+   "op": "fault",
+   "limiter": "closed",
+   "fault": "error",
+   "on": [
+    "peek"
+   ]
+  },
+  {
+   "op": "attempt",
+   "at_ms": 1700000000000,
+   "lockout": "closed-login",
+   "ids": [
+    "u"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "verified": null,
+     "verify_ran": false,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "heal",
+   "limiter": "closed"
+  },
+  {
+   "op": "fault",
+   "limiter": "closed",
+   "fault": "error",
+   "on": [
+    "hit"
+   ]
+  },
+  {
+   "op": "attempt",
+   "lockout": "closed-login",
+   "ids": [
+    "u"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": false,
+       "reason": "store_error",
+       "status": 503,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "heal",
+   "limiter": "closed"
+  },
+  {
+   "op": "fault",
+   "limiter": "open",
+   "fault": "error",
+   "on": [
+    "peek",
+    "hit"
+   ]
+  },
+  {
+   "op": "attempt",
+   "lockout": "open-login",
+   "ids": [
+    "u"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "u",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "open",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "open-login",
+   "ids": [
+    "u"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "u",
+      "failed": true
+     },
+     {
+      "op": "reset",
+      "limiter": "open",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "fault",
+   "limiter": "open",
+   "fault": "error",
+   "on": [
+    "reset"
+   ]
+  },
+  {
+   "op": "attempt",
+   "lockout": "open-login",
+   "ids": [
+    "u"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "u"
+     },
+     {
+      "op": "reset",
+      "limiter": "open",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "fault",
+   "limiter": "closed",
+   "fault": "error",
+   "on": [
+    "reset"
+   ]
+  },
+  {
+   "op": "attempt",
+   "lockout": "closed-login",
+   "ids": [
+    "u"
+   ],
+   "verify": true,
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "u"
+     },
+     {
+      "op": "reset",
+      "limiter": "closed",
+      "id": "u",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": true,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 0,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

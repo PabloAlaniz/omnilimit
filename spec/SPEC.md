@@ -102,27 +102,77 @@ hit. Reset steps have no `expect`.
 ## Recipes
 
 Two compositions of check, peek and reset are common enough to have a fixed meaning. They add
-no state and no store operation.
+no state and no store operation. `recipe` vectors apply to ports that provide the recipes.
 
-**Combined check** applies an ordered list of limits, each a limiter and an id, to one request:
+### Common rules
 
-1. Peek every limit, in order. If any is denied, nothing is counted: the result is denied, and
-   its governing decision is the denied peek with the largest `retry_after_ms` (the first, on
-   a tie).
-2. Otherwise check every limit, in order. If one is denied, stop: the limits after it are not
-   counted, the ones before it stay counted, and that decision governs.
-3. If all are allowed, the governing decision is the one with the smallest `remaining` (the
-   first, on a tie; a `null` remaining never governs over a number).
+1. A recipe only calls `peek`, `check` and `reset` of the limiters it is given.
+2. An entry is a limiter, an id and a cost (default 1). Entries are independent: the same
+   limiter and id may appear twice, and each one is peeked and counted on its own. An empty
+   list is a value error, raised before any store call.
+3. The governing decision of a list `d` of decisions: if any is denied, the denied one with the
+   largest `retry_after_ms` (`null` counts as 0), the lowest index on a tie. Otherwise the one
+   with the smallest non-null `remaining`, the lowest index on a tie, or `d[0]` if every
+   `remaining` is `null`. It is one of the reported decisions, not a copy, and a combined
+   result is allowed exactly when its governing decision is.
+4. Operations run one at a time in entry order, each finished before the next starts.
+5. Each limit follows its own `onStoreError`. An `open` failure is allowed, with reason
+   `store_error` and `remaining` `null`, so by rule 3 it never governs over a number. A
+   `closed` failure is a denial with `retry_after_ms` 1000 that competes under rule 3 with no
+   priority. A failed reset is reported as `false`, follows neither mode, and does not stop the
+   resets after it.
+6. Every entry's cost is validated against its limiter before the recipe's first store call.
+7. A recipe that peeks raises a type error before any store call if any of its limiters is of
+   tier `approximate`.
 
-Step 2 can deny after step 1 allowed, because a peek is advisory: the combination is not
-atomic. It needs stores that can peek.
+When several entries break rules 2, 6 or 7, which error is raised is not specified.
 
-**Lockout** counts only failed attempts against a limiter, for an id and a verification:
+### Combined check
 
-1. Peek. If denied, the verification does not run and the result is that denial.
-2. Run the verification. If it raises, nothing is counted.
-3. If it succeeds, reset the id, unless told not to. If it fails, check the id: that decision
-   is reported, and it is allowed unless a concurrent attempt took the last unit.
+`checkAll` applies an ordered list of entries to one request:
+
+1. Peek every entry, in order, without stopping at a denial. If any peek is denied, nothing is
+   counted: the result is denied, its decisions are all the peeks, and the governing decision
+   follows rule 3.
+2. Otherwise check every entry, in order, and stop at the first denial. The entries after it
+   are not counted, the ones before it stay counted, the decisions end with that denial, and
+   it governs.
+3. If no check is denied, the result is allowed, its decisions are all the checks, and the
+   governing decision follows rule 3.
+
+### Lockout
+
+A lockout counts only failed attempts against one limiter, for an id and a verification:
+
+1. Peek the id. If denied, the verification does not run: the result is not allowed, with that
+   denial.
+2. Run the verification. If it raises, nothing else is called and the error reaches the caller
+   unchanged.
+3. If it returns true, reset the id, unless told not to. The result is allowed and verified,
+   with the peek's decision.
+4. If it returns false, check the id. The result is allowed and not verified, with the check's
+   decision. That decision is allowed unless a concurrent attempt took the last unit or the
+   store failed `closed`.
+
+### What recipes do not promise
+
+- Atomicity. A peek is advisory, so under concurrency `checkAll` can pass every peek, count
+  some entries and then be denied by a later one. The entries already counted stay counted.
+- A bound on verifications. Attempts that overlap can all pass the peek before any of them is
+  counted, so a lockout can run the verification more than `burst` times. Each unit freed lets
+  through about the attacker's rate times the time between peek and check.
+
+### Recipe vectors
+
+A `recipe` vector names its limiters and runs a `timeline` against them. A step's `at_ms` is
+passed to every store call as `now`, and holds for the steps after it until another one sets
+it. `fault` makes a limiter's store fail (`error`) or hang (`timeout`) on the listed operations
+until `heal`. `expect.calls` is every store call the step made, in order, as `peek`, `hit` or
+`reset` with the limiter and the id, marked `failed` when the fault answered. `inspect` reads a
+bucket's raw state without counting as a call. A combined result gives `allowed`, the index of
+the `governing` decision and the `decisions`; an attempt's adds `verified` and `verify_ran`,
+with its one decision as `decisions[0]`. `error` names the kind raised: `value`, `type`, or
+`verify` for the verification's own error.
 
 ## State format 1
 
@@ -150,8 +200,8 @@ An injected `now` exists only for conformance vectors; with it, Redis does not s
 
 | Tier | Promise | Vectors | Stores |
 |---|---|---|---|
-| `exact` | Atomic and shared | `sequence`, `concurrency`, plus core kinds | Redis, Valkey, Postgres, Durable Objects |
-| `local` | Exact per process; N instances allow about N times the limit | `sequence`, plus core kinds | Memory |
+| `exact` | Atomic and shared | `sequence`, `concurrency`, `recipe`, plus core kinds | Redis, Valkey, Postgres, Durable Objects |
+| `local` | Exact per process; N instances allow about N times the limit | `sequence`, `recipe`, plus core kinds | Memory |
 | `approximate` | Only allowed or denied; `remaining` and `reset` are `null` | `contract`, `failure` | Cloudflare rate limit binding |
 
 Every decision reports its tier. Workers KV is not supported: it is not atomic, so it cannot
@@ -218,5 +268,6 @@ The effective window is the retry time when denied, the time until the next unit
 | `failure` | Each fault with each failure mode |
 | `concurrency` | 200 simultaneous hits allow exactly `burst` |
 | `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
+| `recipe` | Combined checks and lockouts: store calls in order, decisions, the governing one, and errors |
 
 Changing the meaning of a vector requires a new spec version.

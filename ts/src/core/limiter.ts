@@ -5,6 +5,16 @@ import type { Decision, HeaderInput, HitParams, Limiter, LimiterEvent, LimiterOp
 
 const DEFAULT_STORE_TIMEOUT_MS = 1000;
 const STORE_ERROR_RETRY_MS = 1000;
+// A registered symbol, so that a limiter from one bundle is understood by recipes from another.
+const ASSERT_COST = Symbol.for('omnilimit.assertCost');
+
+/**
+ * Validate a cost for this limiter without calling its store, as recipes must before their first
+ * store call. A limiter not made by `createLimiter` is left to validate it when called.
+ */
+export function assertLimiterCost(limiter: Limiter, cost: number | undefined): void {
+  (limiter as { [ASSERT_COST]?: (cost: number | undefined) => void })[ASSERT_COST]?.(cost);
+}
 
 async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -113,7 +123,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
   const unsupported = (op: 'peek' | 'reset') =>
     new TypeError(`omnilimit: this store (tier ${store.tier}) does not support ${op}`);
 
-  return {
+  const limiter: Limiter = {
     scope,
     tier: store.tier,
     async check(id, checkOptions) {
@@ -142,4 +152,6 @@ export function createLimiter(options: LimiterOptions): Limiter {
       return true;
     },
   };
+  Object.defineProperty(limiter, ASSERT_COST, { value: (cost: number | undefined) => void weighed(cost) });
+  return limiter;
 }

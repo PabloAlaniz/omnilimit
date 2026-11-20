@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from omnilimit._limiter import AsyncLimiter, Limiter
 from omnilimit._types import Decision
@@ -49,13 +50,19 @@ def _refusal(peeks: list[Decision]) -> CombinedDecision | None:
     return CombinedDecision(allowed=False, decision=_longest_wait(refused), decisions=tuple(peeks))
 
 
-def _needs_entries(entries: Sequence[object]) -> None:
-    if len(entries) == 0:
-        raise ValueError("omnilimit: check_all needs at least one limit")
-
-
 def _cost(entry: tuple[object, ...]) -> int:
     return entry[2] if len(entry) > 2 else 1  # type: ignore[return-value]
+
+
+def _validate(recipe: str, entries: Sequence[tuple[Any, ...]]) -> None:
+    """Everything a recipe can refuse, checked before its first store call. See the spec."""
+    if len(entries) == 0:
+        raise ValueError(f"omnilimit: {recipe} needs at least one limit")
+    for entry in entries:
+        limiter: Limiter | AsyncLimiter = entry[0]
+        if limiter.tier == "approximate":
+            raise TypeError(f"omnilimit: {recipe} peeks, and a store of tier approximate cannot")
+        limiter._core.weighed(_cost(entry))
 
 
 def check_all(
@@ -68,9 +75,11 @@ def check_all(
     is advisory: two requests racing for the last unit can both pass it, and then the second is
     denied while counting, with the limits before it already counted. Needs stores that can peek.
 
-    An entry may carry a third value, the cost of the request under that limit.
+    An entry may carry a third value, the cost of the request under that limit. Before any store
+    call, raises `ValueError` for an empty list or a cost a limit does not accept, and
+    `TypeError` for a limiter of tier approximate.
     """
-    _needs_entries(entries)
+    _validate("check_all", entries)
     refusal = _refusal([entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])
     if refusal is not None:
         return refusal
@@ -89,7 +98,7 @@ async def check_all_async(
     entries: Sequence[tuple[AsyncLimiter, str] | tuple[AsyncLimiter, str, int]],
 ) -> CombinedDecision:
     """`check_all` for `AsyncLimiter`."""
-    _needs_entries(entries)
+    _validate("check_all", entries)
     refusal = _refusal([await entry[0].peek(entry[1], cost=_cost(entry)) for entry in entries])
     if refusal is not None:
         return refusal
@@ -134,8 +143,10 @@ class Lockout:
         """Run `verify` unless `id_value` has failed too often.
 
         A false result counts as a failure and a true one clears the count. If `verify` raises,
-        nothing is counted and the error is yours.
+        nothing is counted and the error is yours. Raises `TypeError`, before any store call, if
+        the limiter is of tier approximate.
         """
+        _validate("a lockout", [(self._limiter, id_value)])
         gate = self._limiter.peek(id_value)
         if not gate.allowed:
             return Attempt(allowed=False, verified=None, decision=gate)
@@ -154,6 +165,7 @@ class AsyncLockout:
         self._reset_on_success = reset_on_success
 
     async def attempt(self, id_value: str, verify: Callable[[], Awaitable[bool] | bool]) -> Attempt:
+        _validate("a lockout", [(self._limiter, id_value)])
         gate = await self._limiter.peek(id_value)
         if not gate.allowed:
             return Attempt(allowed=False, verified=None, decision=gate)

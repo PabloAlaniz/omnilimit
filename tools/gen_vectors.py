@@ -541,9 +541,395 @@ def shorthands() -> dict[str, dict]:
     }
 
 
+OPEN_FAILURE = {"allowed": True, "reason": "store_error", "status": None, "remaining": None, "reset_ms": None, "retry_after_ms": None}
+CLOSED_FAILURE = {"allowed": False, "reason": "store_error", "status": 503, "remaining": None, "reset_ms": None, "retry_after_ms": 1000}
+
+
+def short(r: dict) -> dict:
+    return {
+        "allowed": r["allowed"],
+        "reason": "ok" if r["allowed"] else "limited",
+        "status": None if r["allowed"] else 429,
+        "remaining": r["remaining"],
+        "reset_ms": r["reset_ms"],
+        "retry_after_ms": r["retry_after_ms"],
+    }
+
+
+def governing(decisions: list[dict]) -> int:
+    """Rule 3, written as a ranking rather than a running minimum like the ports."""
+    assert decisions, "a combined result always has a decision"
+    ranked = list(enumerate(decisions))
+    denied = [(i, d) for i, d in ranked if not d["allowed"]]
+    if denied:
+        # Largest wait first, then lowest index: sort on (-wait, index) and take the head.
+        return sorted(denied, key=lambda p: (-(p[1]["retry_after_ms"] or 0), p[0]))[0][0]
+    counted = sorted((d["remaining"], i) for i, d in ranked if d["remaining"] is not None)
+    return counted[0][1] if counted else 0
+
+
+class RecipeError(Exception):
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+
+
+class RecipeModel:
+    """The recipes over Meters, one per limiter and id, with a log of every store call."""
+
+    OPS = ("check_all", "attempt", "check", "peek", "reset", "inspect", "fault", "heal")
+
+    def __init__(self, limiters: dict, lockouts: dict | None = None) -> None:
+        scopes = [cfg["scope"] for cfg in limiters.values()]
+        assert len(set(scopes)) == len(scopes), "limiters with one scope would share buckets"
+        self.limiters, self.lockouts = limiters, lockouts or {}
+        self.meters: dict[tuple[str, str], Meter] = {}
+        self.faults: dict[str, tuple[str, set[str]]] = {}
+        self.now = BASE
+        self.calls: list[dict] = []
+
+    def meter(self, name: str, who: str) -> Meter:
+        p = self.limiters[name]["policy"]
+        return self.meters.setdefault((name, who), Meter(p["limit"], p["window_ms"], p["burst"]))
+
+    def store(self, op: str, name: str, who: str, cost: int = 1) -> dict | None:
+        """One store call: its result, or None when the armed fault answers it."""
+        fault = self.faults.get(name)
+        failed = fault is not None and op in fault[1]
+        self.calls.append({"op": op, "limiter": name, "id": who, **({"failed": True} if failed else {})})
+        if failed:
+            return None
+        m = self.meter(name, who)
+        if op == "reset":
+            m.reset()
+            return {}
+        return m.hit(self.now, cost) if op == "hit" else m.peek(self.now, cost)
+
+    def decide(self, op: str, name: str, who: str, cost: int = 1) -> dict:
+        r = self.store(op, name, who, cost)
+        if r is None:
+            return dict(OPEN_FAILURE if self.limiters[name]["on_store_error"] == "open" else CLOSED_FAILURE)
+        return short(r)
+
+    def validate(self, entries: list[dict], peeks: bool) -> None:
+        if not entries:
+            raise RecipeError("value")
+        approximate = [e for e in entries if self.limiters[e["limiter"]].get("tier") == "approximate"]
+        burst = lambda e: self.limiters[e["limiter"]]["policy"]["burst"]  # noqa: E731
+        bad_cost = [e for e in entries if not (isinstance(e.get("cost", 1), int) and 1 <= e.get("cost", 1) <= burst(e))]
+        assert not (approximate and bad_cost), "which error wins is unspecified: keep vectors to one"
+        if peeks and approximate:
+            raise RecipeError("type")
+        if bad_cost:
+            raise RecipeError("value")
+
+    def check_all(self, entries: list[dict]) -> dict:
+        self.validate(entries, peeks=True)
+        cost = lambda e: e.get("cost", 1)  # noqa: E731
+        peeks = [self.decide("peek", e["limiter"], e["id"], cost(e)) for e in entries]
+        if not all(d["allowed"] for d in peeks):
+            result = {"allowed": False, "governing": governing(peeks), "decisions": peeks}
+        else:
+            counted: list[dict] = []
+            for e in entries:
+                counted.append(self.decide("hit", e["limiter"], e["id"], cost(e)))
+                if not counted[-1]["allowed"]:
+                    break
+            last = counted[-1]
+            index = len(counted) - 1 if not last["allowed"] else governing(counted)
+            result = {"allowed": last["allowed"], "governing": index, "decisions": counted}
+            # A denial while counting is the only one in the list, so rule 3 picks it too.
+            assert index == governing(counted)
+        # Self-checks: the rules the ports are tested against, restated.
+        g = result["decisions"][result["governing"]]
+        assert result["allowed"] == g["allowed"] == all(d["allowed"] for d in result["decisions"])
+        assert len(result["decisions"]) <= len(entries)
+        if not result["allowed"]:
+            assert (g["retry_after_ms"] or 0) == max(d["retry_after_ms"] or 0 for d in result["decisions"] if not d["allowed"])
+            assert result["decisions"] is peeks or sum(not d["allowed"] for d in result["decisions"]) == 1
+        elif any(d["remaining"] is not None for d in result["decisions"]):
+            assert g["remaining"] == min(d["remaining"] for d in result["decisions"] if d["remaining"] is not None)
+        return result
+
+    def attempt(self, lockout: str, ids: list[str], verify: object) -> dict:
+        limits = self.lockouts[lockout]
+        assert len(limits) == len(ids) == 1, "lockouts take one limit in this spec version"
+        (limit,), (who,) = limits, ids
+        self.validate([{"limiter": limit["limiter"], "id": who}], peeks=True)
+        gate = self.decide("peek", limit["limiter"], who)
+        if not gate["allowed"]:
+            return {"allowed": False, "verified": None, "verify_ran": False, "governing": 0, "decisions": [gate]}
+        if verify == "raise":
+            raise RecipeError("verify")
+        if verify:
+            if limit.get("reset_on_success", True):
+                self.store("reset", limit["limiter"], who)
+            return {"allowed": True, "verified": True, "verify_ran": True, "governing": 0, "decisions": [gate]}
+        counted = self.decide("hit", limit["limiter"], who)
+        return {"allowed": True, "verified": False, "verify_ran": True, "governing": 0, "decisions": [counted]}
+
+    def step(self, step: dict) -> dict:
+        op = step["op"]
+        assert op in self.OPS
+        if "at_ms" in step:
+            self.now = step["at_ms"]
+        if op == "fault":
+            self.faults[step["limiter"]] = (step["fault"], set(step["on"]))
+            return step
+        if op == "heal":
+            self.faults.pop(step["limiter"], None)
+            return step
+        if op == "inspect":
+            r = self.meter(step["limiter"], step["id"]).peek(self.now)
+            return {**step, "expect": {"state": r["state"]}}
+        self.calls = []
+        expect: dict = {}
+        try:
+            if op == "check_all":
+                expect["result"] = self.check_all(step["entries"])
+            elif op == "attempt":
+                expect["result"] = self.attempt(step["lockout"], step["ids"], step["verify"])
+            elif op == "reset":
+                expect["result"] = self.store("reset", step["limiter"], step["id"]) is not None
+            else:
+                entry = {"limiter": step["limiter"], "id": step["id"], **({"cost": step["cost"]} if "cost" in step else {})}
+                if op == "peek":
+                    self.validate([entry], peeks=True)
+                expect["result"] = self.decide("hit" if op == "check" else "peek", step["limiter"], step["id"], step.get("cost", 1))
+        except RecipeError as error:
+            expect["error"] = error.kind
+        return {**step, "expect": {"calls": self.calls, **expect}}
+
+
+def recipe(vector_id: str, limiters: dict, timeline: list[dict], lockouts: dict | None = None) -> dict:
+    model = RecipeModel(limiters, lockouts)
+    steps = [model.step(step) for step in timeline]
+    vector = {"spec": SPEC, "id": vector_id, "kind": "recipe", "tiers": SEQ_TIERS, "salt": "s", "limiters": limiters}
+    if lockouts:
+        vector["lockouts"] = lockouts
+    vector["timeline"] = steps
+    return vector
+
+
+def lim(scope: str, limit: int, window_ms: int, burst: int | None = None, on: str = "closed", tier: str | None = None) -> dict:
+    out = {"scope": scope, "policy": {"limit": limit, "window_ms": window_ms, "burst": burst or limit}, "on_store_error": on}
+    if tier:
+        out["tier"] = tier
+    return out
+
+
+def recipes() -> dict[str, dict]:
+    b = BASE
+
+    def ca(*entries: tuple, at: int | None = None) -> dict:
+        step: dict = {"op": "check_all"}
+        if at is not None:
+            step["at_ms"] = at
+        step["entries"] = [{"limiter": e[0], "id": e[1], **({"cost": e[2]} if len(e) > 2 else {})} for e in entries]
+        return step
+
+    def one(op: str, name: str, who: str, cost: int | None = None, at: int | None = None) -> dict:
+        step: dict = {"op": op}
+        if at is not None:
+            step["at_ms"] = at
+        step.update({"limiter": name, "id": who})
+        if cost is not None:
+            step["cost"] = cost
+        return step
+
+    def att(who: str, verify: object, lockout: str = "login", at: int | None = None) -> dict:
+        step: dict = {"op": "attempt"}
+        if at is not None:
+            step["at_ms"] = at
+        step.update({"lockout": lockout, "ids": [who], "verify": verify})
+        return step
+
+    def fault(name: str, kind: str, on: list[str]) -> dict:
+        return {"op": "fault", "limiter": name, "fault": kind, "on": on}
+
+    def heal(name: str) -> dict:
+        return {"op": "heal", "limiter": name}
+
+    two = {"ip": lim("ip", 2, 60_000), "user": lim("user", 5, 60_000)}
+    named: dict[str, tuple] = {
+        "all-allowed-counts-every-limit": (
+            {"ip": lim("ip", 10, 60_000), "user": lim("user", 3, 60_000)},
+            [ca(("ip", "a"), ("user", "u"), at=b), one("inspect", "ip", "a"), one("inspect", "user", "u")],
+        ),
+        "peek-reports-every-denial": (
+            {"a": lim("a", 1, 60_000), "b": lim("b", 1, 10_000), "c": lim("c", 5, 60_000)},
+            [one("check", "a", "x", at=b), one("check", "b", "x"), ca(("a", "x"), ("c", "x"), ("b", "x"), at=b + 1000), one("inspect", "c", "x")],
+        ),
+        "governing-tie-picks-the-first": (
+            {"a": lim("a", 1, 60_000), "b": lim("b", 1, 60_000), "c": lim("c", 4, 60_000), "d": lim("d", 4, 60_000)},
+            [
+                one("check", "a", "x", at=b), one("check", "b", "x"),
+                ca(("c", "x"), ("a", "x"), ("b", "x"), at=b + 5),
+                ca(("c", "y"), ("d", "y")),
+                ca(("d", "y"), ("c", "y")),
+            ],
+        ),
+        "null-remaining-never-governs": (
+            {"down": lim("down", 3, 60_000, on="open"), "ip": lim("ip", 2, 60_000)},
+            [
+                fault("down", "error", ["peek", "hit"]),
+                ca(("down", "x"), ("ip", "a"), at=b),
+                ca(("down", "x"), ("down", "y")),
+                ca(("ip", "a"), ("down", "x")),
+                ca(("ip", "a"), ("down", "x")),
+            ],
+        ),
+        "same-entry-twice": (
+            two,
+            [ca(("ip", "a"), ("ip", "a"), at=b), one("check", "user", "u"), ca(("user", "u"), ("ip", "a"), ("ip", "a"), at=b + 30_000), one("inspect", "user", "u"), one("inspect", "ip", "a")],
+        ),
+        "check-all-partial-count-when-a-later-entry-denies": (
+            {"ip": lim("ip", 3, 60_000), "user": lim("user", 3, 60_000), "last": lim("last", 3, 60_000)},
+            [
+                ca(("ip", "a"), ("user", "u"), ("ip", "a", 3), ("last", "z"), at=b),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"), one("inspect", "last", "z"),
+            ],
+        ),
+        "check-all-partial-count-after-closed-failure": (
+            {"ip": lim("ip", 3, 60_000), "user": lim("user", 3, 60_000), "last": lim("last", 3, 60_000)},
+            [
+                fault("user", "error", ["hit"]),
+                ca(("ip", "a"), ("user", "u"), ("last", "z"), at=b),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"), one("inspect", "last", "z"),
+                heal("user"),
+                ca(("ip", "a"), ("user", "u"), ("last", "z")),
+            ],
+        ),
+        "open-and-closed-failures": (
+            {"open": lim("open", 2, 60_000, on="open"), "closed": lim("closed", 2, 60_000), "ip": lim("ip", 1, 1000)},
+            [
+                one("check", "ip", "a", at=b),
+                fault("open", "error", ["peek", "hit", "reset"]),
+                fault("closed", "error", ["peek"]),
+                ca(("open", "x"), ("ip", "a"), at=b + 1),
+                ca(("closed", "x"), ("open", "x"), ("ip", "a")),
+                ca(("ip", "a"), ("closed", "x")),
+                ca(("open", "x"), ("ip", "a"), at=b + 1000),
+                heal("closed"),
+                ca(("closed", "x"), ("open", "x")),
+                one("reset", "open", "x"),
+                one("reset", "closed", "x"),
+            ],
+        ),
+        "store-timeout-follows-each-mode": (
+            {"open": lim("open", 2, 60_000, on="open"), "closed": lim("closed", 2, 60_000)},
+            [
+                fault("open", "timeout", ["peek"]),
+                ca(("open", "x"), ("closed", "x"), at=b),
+                fault("closed", "timeout", ["hit"]),
+                ca(("closed", "x"), ("open", "x")),
+                heal("open"), heal("closed"),
+                ca(("open", "x"), ("closed", "x")),
+            ],
+        ),
+        "cost-validated-before-any-store-call": (
+            {"ip": lim("ip", 10, 60_000, 4), "user": lim("user", 5, 60_000)},
+            [
+                ca(("ip", "a"), ("user", "u", 6), at=b),
+                ca(("ip", "a"), ("user", "u", 0)),
+                ca(("ip", "a", 5), ("user", "u")),
+                ca(("ip", "a", 4), ("user", "u", 5)),
+                one("inspect", "ip", "a"),
+            ],
+        ),
+        "empty-list-is-a-value-error": (
+            {"ip": lim("ip", 1, 1000)},
+            [ca(at=b), ca(("ip", "a"))],
+        ),
+        "approximate-rejected-before-any-store-call": (
+            {"ip": lim("ip", 5, 60_000), "edge": lim("edge", 5, 60_000, on="open", tier="approximate")},
+            [ca(("ip", "a"), ("edge", "a"), at=b), ca(("edge", "a")), one("inspect", "ip", "a")],
+        ),
+        "lockout-counts-failures-and-resets-on-success": (
+            {"fail": lim("fail", 2, 60_000)},
+            [
+                att("u", False, at=b), att("u", True), att("u", False), att("u", False),
+                att("u", True, at=b + 1), one("inspect", "fail", "u"),
+                att("u", True, at=b + 30_000), one("inspect", "fail", "u"),
+                att("v", False), att("u", False),
+            ],
+            {"login": [{"limiter": "fail"}]},
+        ),
+        "lockout-without-reset-keeps-the-failures": (
+            {"fail": lim("fail", 2, 60_000)},
+            [att("u", False, at=b), att("u", True), one("inspect", "fail", "u"), att("u", False), att("u", True), att("u", True, at=b + 30_000)],
+            {"login": [{"limiter": "fail", "reset_on_success": False}]},
+        ),
+        "lockout-verify-raises-counts-nothing": (
+            {"fail": lim("fail", 1, 60_000)},
+            [att("u", "raise", at=b), one("inspect", "fail", "u"), att("u", False), att("u", "raise"), one("inspect", "fail", "u")],
+            {"login": [{"limiter": "fail"}]},
+        ),
+        "lockout-store-failures": (
+            {"closed": lim("closed", 2, 60_000), "open": lim("open", 2, 60_000, on="open")},
+            [
+                fault("closed", "error", ["peek"]), att("u", True, "closed-login", at=b), heal("closed"),
+                fault("closed", "error", ["hit"]), att("u", False, "closed-login"), heal("closed"),
+                fault("open", "error", ["peek", "hit"]), att("u", False, "open-login"), att("u", True, "open-login"),
+                fault("open", "error", ["reset"]), att("u", True, "open-login"),
+                fault("closed", "error", ["reset"]), att("u", True, "closed-login"),
+            ],
+            {"closed-login": [{"limiter": "closed"}], "open-login": [{"limiter": "open"}]},
+        ),
+        "lockout-on-approximate-is-a-type-error": (
+            {"edge": lim("edge", 5, 60_000, on="open", tier="approximate")},
+            [att("u", False, "edge-login", at=b)],
+            {"edge-login": [{"limiter": "edge"}]},
+        ),
+    }
+    out = {f"recipe/{k}": recipe(f"recipe/{k}", *v) for k, v in named.items()}
+
+    rng = random.Random(20261120)
+    for n in range(24):
+        limiters = {}
+        for name in ("a", "b", "c")[: rng.randrange(1, 4)]:
+            limit = rng.choice([1, 2, 3, 5, 10])
+            window = rng.choice([1000, 1009, 10_000, 60_000])
+            burst = rng.choice([1, 2, 3, limit, limit + 1])
+            limiters[name] = lim(name, limit, window, burst, on=rng.choice(["open", "closed"]))
+        names = list(limiters)
+        lockouts = {"login": [{"limiter": names[0], **({"reset_on_success": False} if rng.random() < 0.3 else {})}]}
+        at = BASE + rng.randrange(1000)
+        timeline: list[dict] = []
+        faulted: set[str] = set()
+        for i in range(rng.randrange(10, 25)):
+            dt = rng.choice([0, 0, 0, 1, 17, 333, 1000, 5000])
+            at += dt
+            when = at if (i == 0 or dt) else None
+            kind = rng.choice(["check_all"] * 6 + ["check", "peek", "attempt", "attempt", "reset", "inspect", "fault"])
+            if kind == "fault":
+                if faulted and rng.random() < 0.5:
+                    name = rng.choice(sorted(faulted))
+                    faulted.discard(name)
+                    timeline.append(heal(name))
+                else:
+                    name = rng.choice(names)
+                    faulted.add(name)
+                    timeline.append(fault(name, "error", rng.sample(["peek", "hit", "reset"], rng.randrange(1, 4))))
+                continue
+            if kind == "check_all":
+                entries = []
+                for _ in range(rng.randrange(1, 4)):
+                    name = rng.choice(names)
+                    burst = limiters[name]["policy"]["burst"]
+                    cost = rng.choice([1, 1, 1, 2, burst])
+                    entries.append((name, rng.choice("xxy"), *([min(cost, burst)] if cost != 1 else [])))
+                timeline.append(ca(*entries, at=when))
+            elif kind == "attempt":
+                timeline.append(att(rng.choice("uuv"), rng.choice([True, False, False, False, "raise"]), at=when))
+            else:
+                timeline.append(one(kind, rng.choice(names), rng.choice("xxy"), at=when))
+        out[f"recipe/random-{n:03d}"] = recipe(f"recipe/random-{n:03d}", limiters, timeline, lockouts)
+    return out
+
+
 def build() -> dict[str, dict]:
     out: dict[str, dict] = {}
-    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands()):
+    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands(), recipes()):
         out.update(part)
     return out
 

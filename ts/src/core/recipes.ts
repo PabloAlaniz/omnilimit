@@ -1,3 +1,4 @@
+import { assertLimiterCost } from './limiter.js';
 import type { Decision, Limiter } from './types.js';
 
 /** One limit of a combined check: the limiter and the id to count under it. */
@@ -20,6 +21,17 @@ export interface CombinedDecision {
 }
 
 const options = (cost: number | undefined) => (cost === undefined ? {} : { cost });
+
+/** Everything a recipe can refuse, checked before its first store call. See "Recipes" in the spec. */
+function validate(recipe: string, entries: readonly LimitEntry[]): void {
+  if (entries.length === 0) throw new RangeError(`omnilimit: ${recipe} needs at least one limit`);
+  for (const { limiter, cost } of entries) {
+    if (limiter.tier === 'approximate') {
+      throw new TypeError(`omnilimit: ${recipe} peeks, and a store of tier approximate cannot`);
+    }
+    assertLimiterCost(limiter, cost);
+  }
+}
 
 function longestWait(decisions: Decision[]): Decision {
   let governing = decisions[0] as Decision;
@@ -46,9 +58,12 @@ function fewestLeft(decisions: Decision[]): Decision {
  * The peek is advisory: two requests racing for the last unit can both pass it, and then the
  * second is denied while counting. The limits already counted for it stay counted. Needs
  * stores that can peek, so not the `approximate` tier.
+ *
+ * Before any store call, throws a `RangeError` for an empty list or a cost a limit does not
+ * accept, and a `TypeError` for a limiter of tier `approximate`.
  */
 export async function checkAll(entries: readonly LimitEntry[]): Promise<CombinedDecision> {
-  if (entries.length === 0) throw new RangeError('omnilimit: checkAll needs at least one limit');
+  validate('checkAll', entries);
   const peeks: Decision[] = [];
   for (const { limiter, id, cost } of entries) peeks.push(await limiter.peek(id, options(cost)));
   const refused = peeks.filter((decision) => !decision.allowed);
@@ -80,6 +95,7 @@ export interface Lockout {
   /**
    * Run `verify` unless `id` has failed too often. A false result counts as a failure, a true
    * one clears the count. If `verify` throws, nothing is counted and the error is yours.
+   * Throws a `TypeError`, before any store call, if the limiter is of tier `approximate`.
    */
   attempt(id: string, verify: () => boolean | Promise<boolean>): Promise<Attempt>;
 }
@@ -93,6 +109,7 @@ export function createLockout(options: LockoutOptions): Lockout {
   const { limiter, resetOnSuccess = true } = options;
   return {
     async attempt(id, verify) {
+      validate('a lockout', [{ limiter, id }]);
       const gate = await limiter.peek(id);
       if (!gate.allowed) return { allowed: false, verified: null, decision: gate };
       if (await verify()) {
