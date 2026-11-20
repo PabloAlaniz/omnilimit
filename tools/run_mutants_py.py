@@ -14,6 +14,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "python" / "src" / "omnilimit"
 
+# A refund marks its reservation spent before the store call; the mutant marks it after.
+SPEND_FIRST = (
+    "        held = self._core.spend(reservation)\n"
+    "        if held is None:\n"
+    "            return False\n"
+    '        refund = _store_method(self._store, "refund")\n'
+    "        try:\n"
+)
+SPEND_AFTER = (
+    "        if reservation is None or reservation._spent:\n"
+    "            return False\n"
+    "        if reservation._owner is not self._core:\n"
+    '            raise TypeError("omnilimit: this reservation was not made by this limiter")\n'
+    "        held = reservation\n"
+    '        refund = _store_method(self._store, "refund")\n'
+    "        try:\n"
+    "            try:\n"
+)
+REFUND_CALL = "lambda: refund(held._key, held._params, held._since, now_ms))\n"
+SPENT = "            finally:\n                held._spent = True\n"
+
 CORE = [
     (
         "retry-after rounds down",
@@ -403,6 +424,12 @@ CORE = [
         "",
     ),
     (
+        "async refund spent after its store call",
+        "_limiter.py",
+        SPEND_FIRST + "            await self._call(" + REFUND_CALL,
+        SPEND_AFTER + "                await self._call(" + REFUND_CALL + SPENT,
+    ),
+    (
         "failed refund reports success",
         "_limiter.py",
         '            self._core.report_failure(error, "refund")\n            return False',
@@ -435,6 +462,12 @@ CORE = [
 ]
 
 STORES = [
+    (
+        "sql refund: no row lock",
+        "_generated.py",
+        "WHERE s.key = p_key\\n  FOR UPDATE;\\n  v_found := ",
+        "WHERE s.key = p_key;\\n  v_found := ",
+    ),
     (
         "redis: NOSCRIPT not recognised",
         "stores/redis.py",
@@ -512,6 +545,7 @@ def main() -> int:
         "tests/test_limiter.py",
         "tests/test_fastapi.py",
         "tests/test_recipes.py",
+        "tests/test_interleavings.py",
     ]
     if fails(core_tests):
         raise SystemExit("the unmutated suite must pass first")

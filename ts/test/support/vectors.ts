@@ -18,6 +18,7 @@ import {
   type Pending,
 } from '../../src/core/recipes.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
+import { runRecipeConcurrency, type ConcurrencySummary } from './concurrency.js';
 import type { Decision, HitParams, Limiter, RawHit, RawRefund, Reservation, Store } from '../../src/core/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -126,7 +127,34 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
   }
 }
 
+/** Compare what a recipe run under concurrency reported with what its vector promises. */
+export function expectConcurrency(vector: Vector, got: ConcurrencySummary): void {
+  const context = vector.id as string;
+  expect(got.errors, `${context}: store failures`).toBe(0);
+  if (vector.expect_allowed !== undefined) expect(got.allowed, context).toBe(vector.expect_allowed);
+  if (vector.expect_allowed_at_most !== undefined) {
+    expect(got.allowed, context).toBeLessThanOrEqual(vector.expect_allowed_at_most);
+    // Something must get through, or the bound says nothing.
+    expect(got.allowed, context).toBeGreaterThan(0);
+  }
+  if (vector.expect_verify_ran !== undefined) expect(got.verifyRan, context).toBe(vector.expect_verify_ran);
+  if (vector.expect_counted !== undefined) expect(got.counted, context).toEqual(vector.expect_counted);
+  if (vector.expect_levels !== undefined) expect(got.levels, context).toEqual(vector.expect_levels);
+  for (const [name, config] of Object.entries<Vector>(vector.limiters)) {
+    const { burst, window_ms: window } = config.policy;
+    if (vector.levels_within_capacity) expect(got.levels[name], `${context}: ${name}`).toBeLessThanOrEqual(burst * window);
+    if (vector.levels_match_counted) expect(got.levels[name], `${context}: ${name}`).toBe(got.counted[name]! * window);
+    // An allowed result was counted under every limit it names.
+    const entry = (vector.recipe.entries ?? vector.recipe.lockout.limits).find((e: Vector) => e.limiter === name);
+    if (vector.recipe.op === 'check_all') expect(got.counted[name], `${context}: ${name}`).toBeGreaterThanOrEqual(got.allowed * (entry.cost ?? 1));
+  }
+}
+
 export async function runConcurrency(vector: Vector, store: Store, saltSuffix = ''): Promise<void> {
+  if (vector.recipe) {
+    expectConcurrency(vector, await runRecipeConcurrency({ createLimiter, checkAll, reserveAll, createLockout }, vector, store, saltSuffix));
+    return;
+  }
   const limiter = createLimiter({
     ...toPolicy(vector.policy),
     store,

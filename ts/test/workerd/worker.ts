@@ -1,5 +1,7 @@
 // Runs in real workerd, without nodejs_compat, against the built package.
-import { createLimiter, memoryStore } from '../../dist/index.js';
+import { checkAll, createLimiter, createLockout, memoryStore, reserveAll } from '../../dist/index.js';
+import type { Store } from '../../dist/index.js';
+import { runRecipeConcurrency } from '../support/concurrency.js';
 import { cloudflareBindingStore } from '../../dist/cloudflare.js';
 import { durableObjectStore, OmnilimitDurableObject } from '../../dist/cloudflare-do.js';
 import { resolveClientIp } from '../../dist/ip.js';
@@ -12,7 +14,19 @@ interface Env {
 }
 
 interface Body {
-  op: 'sequence' | 'concurrency' | 'mixed-concurrency' | 'binding' | 'ip' | 'real-clock' | 'real-reset' | 'real-refund';
+  op:
+    | 'sequence'
+    | 'concurrency'
+    | 'recipe-concurrency'
+    | 'mixed-concurrency'
+    | 'reserve-refund'
+    | 'reserve-all'
+    | 'levels'
+    | 'binding'
+    | 'ip'
+    | 'real-clock'
+    | 'real-reset'
+    | 'real-refund';
   store?: 'memory' | 'do';
   [name: string]: unknown;
 }
@@ -60,6 +74,48 @@ export default {
         ),
       );
       return Response.json({ allowed: results.filter((r) => r.allowed).length, errors: results.filter((r) => r.reason === 'store_error').length });
+    }
+    if (body.op === 'recipe-concurrency') {
+      // The recipe form of a concurrency vector, one Durable Object per bucket.
+      const vector = body['vector'] as { salt: string };
+      return Response.json(await runRecipeConcurrency({ createLimiter, checkAll, reserveAll, createLockout }, vector, store, body['salt'] as string));
+    }
+    // One request of many sent at once: every store call at the same time, so a refund gives back
+    // all it took and the levels count exactly what stays reserved or committed.
+    const at = body['at_ms'] as number;
+    const fixed: Store = {
+      tier: store.tier,
+      hit: (key, params) => store.hit(key, params, at),
+      peek: (key, params) => store.peek!(key, params, at),
+      reset: (key) => store.reset!(key),
+      refund: (key, params, sinceMs) => store.refund!(key, params, sinceMs, at),
+    };
+    // Limit 1: a peek's `resetMs` is the level itself.
+    const bucket = (scope: string, burst: number) =>
+      createLimiter({ limit: 1, windowMs: 60_000, burst, store: fixed, scope, salt: body['salt'] as string, onStoreError: 'closed', storeTimeoutMs: 30_000 });
+    if (body.op === 'reserve-refund') {
+      const limiter = bucket('r', 3);
+      const { decision, reservation } = await limiter.reserve('a');
+      const refunded = body['keep'] ? false : await limiter.refund(reservation);
+      return Response.json({ allowed: decision.allowed, kept: decision.allowed && !refunded, error: decision.reason === 'store_error' });
+    }
+    if (body.op === 'reserve-all') {
+      const pending = await reserveAll([
+        { limiter: bucket('a', 4), id: 'x' },
+        { limiter: bucket('b', 3), id: 'y' },
+      ]);
+      const errors = pending.decisions.filter((d) => d.reason === 'store_error').length;
+      if (pending.allowed && body['keep']) {
+        await pending.commit();
+        return Response.json({ allowed: true, kept: true, errors });
+      }
+      const { refunded } = await pending.cancel();
+      return Response.json({ allowed: pending.allowed, kept: false, errors: errors + refunded.filter((done) => done === false).length });
+    }
+    if (body.op === 'levels') {
+      const levels: Record<string, number | null> = {};
+      for (const [scope, burst, id] of body['buckets'] as [string, number, string][]) levels[scope] = (await bucket(scope, burst).peek(id)).resetMs;
+      return Response.json(levels);
     }
     if (body.op === 'mixed-concurrency') {
       // Peeks interleaved with hits: only hits may take quota, and exactly `burst` of them.

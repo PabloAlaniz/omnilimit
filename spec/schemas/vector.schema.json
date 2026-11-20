@@ -129,7 +129,44 @@
     },
     {
       "if": { "properties": { "kind": { "const": "concurrency" } } },
-      "then": { "required": ["policy", "scope", "salt", "id_value", "hits", "at_ms", "expect_allowed"] }
+      "then": {
+        "oneOf": [
+          {
+            "description": "Hits: `hits` checks of one id at once.",
+            "required": ["policy", "scope", "salt", "id_value", "hits", "at_ms", "expect_allowed"],
+            "not": { "required": ["recipe"] }
+          },
+          {
+            "description": "A recipe run by `requests` callers at once, every store call at `at_ms`, all with the same ids.",
+            "required": ["tiers", "salt", "at_ms", "limiters", "requests", "recipe"],
+            "not": { "required": ["hits"] },
+            "anyOf": [{ "required": ["expect_allowed"] }, { "required": ["expect_allowed_at_most"] }],
+            "properties": {
+              "tiers": { "type": "array", "items": { "const": "exact" } },
+              "salt": { "type": "string" },
+              "at_ms": { "type": "integer" },
+              "limiters": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/definitions/concurrency_limiter" } },
+              "requests": { "type": "integer", "minimum": 2 },
+              "recipe": { "$ref": "#/definitions/concurrency_recipe" },
+              "expect_allowed": { "type": "integer", "minimum": 0, "description": "Exactly this many results are allowed: gates, attempts or pendings opened allowed." },
+              "expect_allowed_at_most": { "type": "integer", "minimum": 0, "description": "At most this many results are allowed." },
+              "expect_verify_ran": { "type": "integer", "minimum": 0, "description": "attempt: exactly this many verifications ran." },
+              "expect_counted": {
+                "type": "object",
+                "additionalProperties": { "type": "integer", "minimum": 0 },
+                "description": "Units of the allowed hits under each limiter, each hit weighing its cost: here only the advisory failures or the commits hit."
+              },
+              "expect_levels": {
+                "type": "object",
+                "additionalProperties": { "type": "integer", "minimum": 0 },
+                "description": "Each limiter's level at `at_ms` once every request settled."
+              },
+              "levels_within_capacity": { "const": true, "description": "Each limiter's level once every request settled is at most its capacity." },
+              "levels_match_counted": { "const": true, "description": "Each limiter's level is the units counted under it times its window." }
+            }
+          }
+        ]
+      }
     },
     {
       "if": { "properties": { "kind": { "const": "contract" } } },
@@ -186,6 +223,57 @@
     }
   ],
   "definitions": {
+    "concurrency_limiter": {
+      "type": "object",
+      "required": ["scope", "policy", "on_store_error"],
+      "additionalProperties": false,
+      "properties": {
+        "scope": { "type": "string" },
+        "policy": { "$ref": "#/definitions/policy" },
+        "on_store_error": { "const": "closed", "description": "No store call may fail: a failure would be counted as an error." }
+      }
+    },
+    "concurrency_recipe": {
+      "type": "object",
+      "required": ["op"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "enum": ["gate", "attempt", "reserve_all", "check_all"] },
+        "lockout": {
+          "type": "object",
+          "required": ["limits"],
+          "additionalProperties": false,
+          "properties": {
+            "limits": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/lockout_limit" } },
+            "mode": { "enum": ["advisory", "reserve"], "description": "Absent means advisory." }
+          }
+        },
+        "ids": { "type": "array", "items": { "type": "string" }, "description": "One id per limit of the lockout, the same for every request." },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["limiter", "id"],
+            "additionalProperties": false,
+            "properties": { "limiter": { "type": "string" }, "id": { "type": "string" }, "cost": { "type": "integer", "minimum": 1 } }
+          }
+        },
+        "settle": { "const": "fail", "description": "gate: once every gate is open, every one settles this way at once." },
+        "verify": { "const": false, "description": "attempt: what every verification answers." },
+        "commit": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "reserve_all: once every pending is open, the first `commit` allowed ones in request order commit and every other one cancels, all at once."
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "op": { "const": "gate" } } }, "then": { "required": ["lockout", "ids", "settle"] } },
+        { "if": { "properties": { "op": { "const": "attempt" } } }, "then": { "required": ["lockout", "ids", "verify"] } },
+        { "if": { "properties": { "op": { "const": "reserve_all" } } }, "then": { "required": ["entries", "commit"] } },
+        { "if": { "properties": { "op": { "const": "check_all" } } }, "then": { "required": ["entries"] } }
+      ]
+    },
     "lockout_limit": {
       "type": "object",
       "required": ["limiter"],

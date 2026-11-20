@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { vectorsOf, type Vector } from '../support/vectors.js';
+import { expectConcurrency, vectorsOf, type Vector } from '../support/vectors.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 let mf: Miniflare;
@@ -78,14 +78,50 @@ describe('workerd', () => {
   });
 
   it('durable object: concurrency allows exactly the burst', async () => {
-    for (const vector of vectorsOf('concurrency')) {
+    for (const vector of vectorsOf('concurrency').filter((v) => !v.recipe)) {
       const result = await call({ op: 'concurrency', store: 'do', ...vector, salt: randomUUID() });
       expect(result).toEqual({ allowed: vector.expect_allowed, errors: 0 });
     }
   });
 
+  it.each(vectorsOf('concurrency').filter((v) => v.recipe).map((v): [string, Vector] => [v.id, v]))(
+    'durable object: %s',
+    async (_id, vector) => {
+      expectConcurrency(vector, await call({ op: 'recipe-concurrency', store: 'do', vector, salt: `:${randomUUID()}` }));
+    },
+  );
+
+  // Requests sent to workerd at once, each its own invocation, on one object per bucket.
+  const at = 1_700_000_000_000;
+  const W = 60_000;
+
+  it('durable object: concurrent requests reserve and refund, and the bucket holds what stayed reserved', async () => {
+    const salt = randomUUID();
+    const results = await Promise.all(Array.from({ length: 24 }, (_, i) => call({ op: 'reserve-refund', store: 'do', salt, at_ms: at, keep: i % 3 === 0 })));
+    expect(results.filter((r) => r.error)).toEqual([]);
+    const kept = results.filter((r) => r.kept).length;
+    // Refunds free units for later requests, so how many got one depends on the order; but never
+    // more than the burst stayed, and the bucket holds exactly those.
+    // The first hit to reach the object is allowed, whatever the order.
+    expect(results.filter((r) => r.allowed).length).toBeGreaterThanOrEqual(Math.max(1, kept));
+    expect(kept).toBeLessThanOrEqual(3);
+    expect(await call({ op: 'levels', store: 'do', salt, at_ms: at, buckets: [['r', 3, 'a']] })).toEqual({ r: kept * W });
+  });
+
+  it('durable object: concurrent reserveAll across two objects keeps exactly what was committed', async () => {
+    const salt = randomUUID();
+    const results = await Promise.all(Array.from({ length: 24 }, (_, i) => call({ op: 'reserve-all', store: 'do', salt, at_ms: at, keep: i % 2 === 0 })));
+    expect(results.reduce((sum, r) => sum + r.errors, 0)).toBe(0);
+    const kept = results.filter((r) => r.kept).length;
+    expect(results.filter((r) => r.allowed).length).toBeGreaterThanOrEqual(Math.max(1, kept));
+    expect(kept).toBeLessThanOrEqual(3);
+    // Compensations and cancels gave back every unit they took, in both objects.
+    const levels = await call({ op: 'levels', store: 'do', salt, at_ms: at, buckets: [['a', 4, 'x'], ['b', 3, 'y']] });
+    expect(levels).toEqual({ a: kept * W, b: kept * W });
+  });
+
   it('durable object: peeks racing with hits never take quota', async () => {
-    for (const vector of vectorsOf('concurrency')) {
+    for (const vector of vectorsOf('concurrency').filter((v) => !v.recipe)) {
       const result = await call({ op: 'mixed-concurrency', store: 'do', ...vector, hits: vector.hits * 2, salt: randomUUID() });
       expect(result).toEqual({ allowed: vector.expect_allowed, errors: 0 });
     }

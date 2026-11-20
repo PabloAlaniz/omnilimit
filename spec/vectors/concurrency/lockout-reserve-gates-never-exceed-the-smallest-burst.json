@@ -1,0 +1,55 @@
+{
+ "spec": "1",
+ "id": "concurrency/lockout-reserve-gates-never-exceed-the-smallest-burst",
+ "kind": "concurrency",
+ "tiers": [
+  "exact"
+ ],
+ "salt": "s",
+ "at_ms": 1700000000000,
+ "limiters": {
+  "shared": {
+   "scope": "shared",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 5
+   },
+   "on_store_error": "closed"
+  },
+  "pair": {
+   "scope": "pair",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "requests": 20,
+ "recipe": {
+  "op": "gate",
+  "lockout": {
+   "limits": [
+    {
+     "limiter": "shared"
+    },
+    {
+     "limiter": "pair"
+    }
+   ],
+   "mode": "reserve"
+  },
+  "ids": [
+   "a",
+   "u:a"
+  ],
+  "settle": "fail"
+ },
+ "expect_allowed": 3,
+ "expect_levels": {
+  "shared": 180000,
+  "pair": 180000
+ }
+}

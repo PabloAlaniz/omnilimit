@@ -1,0 +1,51 @@
+{
+ "spec": "1",
+ "id": "concurrency/reserve-all-allows-at-most-the-smallest-burst-and-restores-the-rest",
+ "kind": "concurrency",
+ "tiers": [
+  "exact"
+ ],
+ "salt": "s",
+ "at_ms": 1700000000000,
+ "limiters": {
+  "a": {
+   "scope": "a",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 4
+   },
+   "on_store_error": "closed"
+  },
+  "b": {
+   "scope": "b",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 6
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "requests": 20,
+ "recipe": {
+  "op": "reserve_all",
+  "entries": [
+   {
+    "limiter": "a",
+    "id": "x"
+   },
+   {
+    "limiter": "b",
+    "id": "y",
+    "cost": 2
+   }
+  ],
+  "commit": 2
+ },
+ "expect_allowed": 3,
+ "expect_levels": {
+  "a": 120000,
+  "b": 240000
+ }
+}

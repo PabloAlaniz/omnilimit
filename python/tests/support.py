@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from omnilimit import (
     AsyncLimiter,
@@ -237,7 +238,253 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
         assert got == step["expect"], context
 
 
+class ConcurrentRecipe:
+    """The recipe form of a `concurrency` vector: what the run saw, and the limiters it used.
+
+    Every limiter sees the store through a wrapper that passes the vector's time as `now_ms`,
+    remembers its key so its level can be read afterwards, and counts the units of every
+    allowed hit.
+    """
+
+    def __init__(self, vector: dict[str, Any], store: Any, salt_suffix: str, *, is_async: bool):
+        self.vector = vector
+        self.store = store
+        self.now: int = vector["at_ms"]
+        self.seen: dict[str, tuple[str, HitParams]] = {}
+        self.counted = dict.fromkeys(vector["limiters"], 0)
+        self.allowed = 0
+        self.verify_ran = 0
+        self.errors = 0
+        self._lock = threading.Lock()
+        self.limiters: dict[str, Any] = {}
+        for name, config in vector["limiters"].items():
+            kind = AsyncLimiter if is_async else Limiter
+            self.limiters[name] = kind(
+                **config["policy"],
+                store=self._wrap(name, config["policy"]["window_ms"], is_async=is_async),
+                scope=config["scope"],
+                salt=vector["salt"] + salt_suffix,
+                on_store_error=config["on_store_error"],
+                store_timeout_ms=30_000,
+            )
+        recipe = vector["recipe"]
+        self.subject = tuple(recipe.get("ids", ()))
+        if "lockout" in recipe:
+            limits = [
+                LockoutLimit(self.limiters[limit["limiter"]], id_of=lambda ids, i=i: ids[i])
+                for i, limit in enumerate(recipe["lockout"]["limits"])
+            ]
+            mode = recipe["lockout"].get("mode", "advisory")
+            self.lockout: Any = (AsyncLockout if is_async else Lockout)(limits=limits, mode=mode)
+
+    def _wrap(self, name: str, window: int, *, is_async: bool) -> Any:
+        run = self
+        inner = self.store
+
+        def counted(params: HitParams, hit: RawHit) -> RawHit:
+            if hit.allowed:
+                with run._lock:
+                    run.counted[name] += params.window_ms // window
+            return hit
+
+        if is_async:
+
+            async def settle(result: Any) -> Any:
+                return await result if inspect.isawaitable(result) else result
+
+            async def ahit(key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+                run.seen[name] = (key, params)
+                return counted(params, await settle(inner.hit(key, params, run.now)))
+
+            async def apeek(key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+                run.seen[name] = (key, params)
+                return cast(RawHit, await settle(inner.peek(key, params, run.now)))
+
+            async def arefund(key: str, params: HitParams, since: int, now_ms: Any = None) -> Any:
+                return await settle(inner.refund(key, params, since, run.now))
+
+            return SimpleNamespace(tier=inner.tier, hit=ahit, peek=apeek, refund=arefund)
+
+        def hit(key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            run.seen[name] = (key, params)
+            return counted(params, inner.hit(key, params, run.now))
+
+        def peek(key: str, params: HitParams, now_ms: int | None = None) -> RawHit:
+            run.seen[name] = (key, params)
+            return cast(RawHit, inner.peek(key, params, run.now))
+
+        def refund(key: str, params: HitParams, since: int, now_ms: Any = None) -> Any:
+            return inner.refund(key, params, since, run.now)
+
+        return SimpleNamespace(tier=inner.tier, hit=hit, peek=peek, refund=refund)
+
+    def entries(self) -> list[tuple[Any, ...]]:
+        return [
+            (self.limiters[e["limiter"]], e["id"], *([e["cost"]] if "cost" in e else []))
+            for e in self.vector["recipe"]["entries"]
+        ]
+
+    def failures(self, result: Any) -> Any:
+        """A closed limiter answers a store failure with a denial: count them all."""
+        with self._lock:
+            self.errors += sum(d.reason == "store_error" for d in result.decisions)
+        return result
+
+    def committing(self, pendings: list[Any]) -> set[int]:
+        """The first `commit` allowed pendings, in request order, commit; the others cancel."""
+        allowed = [i for i, pending in enumerate(pendings) if pending.allowed]
+        return set(allowed[: self.vector["recipe"]["commit"]])
+
+    def cancelled(self, result: Any) -> None:
+        with self._lock:
+            self.errors += sum(done is False for done in result.refunded)
+
+    def check(self, levels: dict[str, int]) -> None:
+        """Compare what the run saw with what the vector promises."""
+        vector, context = self.vector, self.vector["id"]
+        assert self.errors == 0, f"{context}: store failures"
+        if "expect_allowed" in vector:
+            assert self.allowed == vector["expect_allowed"], context
+        if "expect_allowed_at_most" in vector:
+            # Something must get through, or the bound says nothing.
+            assert 0 < self.allowed <= vector["expect_allowed_at_most"], context
+        if "expect_verify_ran" in vector:
+            assert self.verify_ran == vector["expect_verify_ran"], context
+        if "expect_counted" in vector:
+            assert self.counted == vector["expect_counted"], context
+        if "expect_levels" in vector:
+            assert levels == vector["expect_levels"], context
+        recipe = vector["recipe"]
+        for name, config in vector["limiters"].items():
+            burst, window = config["policy"]["burst"], config["policy"]["window_ms"]
+            if vector.get("levels_within_capacity"):
+                assert levels[name] <= burst * window, f"{context}: {name}"
+            if vector.get("levels_match_counted"):
+                assert levels[name] == self.counted[name] * window, f"{context}: {name}"
+            if recipe["op"] == "check_all":
+                # An allowed result was counted under every limit it names.
+                entry = next(e for e in recipe["entries"] if e["limiter"] == name)
+                assert self.counted[name] >= self.allowed * entry.get("cost", 1), context
+
+
+def _concurrent_recipe(vector: dict[str, Any], store: Any, salt_suffix: str) -> None:
+    """Every request in its own thread, released together by a barrier; gates and pendings all
+    open, and then all settle."""
+    run = ConcurrentRecipe(vector, store, salt_suffix, is_async=False)
+    recipe, n = vector["recipe"], vector["requests"]
+    barrier = threading.Barrier(n, timeout=30)
+
+    def each(work: Callable[[int], Any]) -> list[Any]:
+        def together(index: int) -> Any:
+            barrier.wait()
+            return work(index)
+
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            return list(pool.map(together, range(n)))
+
+    def verify() -> bool:
+        with run._lock:
+            run.verify_ran += 1
+        # Let other attempts run while this one verifies.
+        time.sleep(0.001)
+        return bool(recipe["verify"])
+
+    if recipe["op"] == "attempt":
+        attempts = each(lambda _: run.failures(run.lockout.attempt(run.subject, verify)))
+        run.allowed = sum(a.allowed for a in attempts)
+    elif recipe["op"] == "gate":
+        gates = each(lambda _: run.failures(run.lockout.begin(run.subject)))
+        run.allowed = sum(gate.allowed for gate in gates)
+        each(lambda i: run.failures(gates[i].fail()))
+    elif recipe["op"] == "check_all":
+        results = each(lambda _: run.failures(check_all(run.entries())))
+        run.allowed = sum(result.allowed for result in results)
+    else:
+        pendings = each(lambda _: run.failures(reserve_all(run.entries())))
+        run.allowed = sum(pending.allowed for pending in pendings)
+        committing = run.committing(pendings)
+
+        def settle(index: int) -> None:
+            if index in committing:
+                run.failures(pendings[index].commit())
+            else:
+                run.cancelled(pendings[index].cancel())
+
+        each(settle)
+    levels = {}
+    for name in vector["limiters"]:
+        key, params = run.seen[name]
+        level = store.peek(key, params, run.now).level
+        assert level is not None
+        levels[name] = level
+    run.check(levels)
+
+
+async def _concurrent_recipe_async(vector: dict[str, Any], store: Any, salt_suffix: str) -> None:
+    run = ConcurrentRecipe(vector, store, salt_suffix, is_async=True)
+    recipe, n = vector["recipe"], vector["requests"]
+
+    async def each(work: Callable[[int], Awaitable[Any]]) -> list[Any]:
+        return list(await asyncio.gather(*(work(i) for i in range(n))))
+
+    async def verify() -> bool:
+        run.verify_ran += 1
+        await asyncio.sleep(0.001)
+        return bool(recipe["verify"])
+
+    async def attempt(_: int) -> Any:
+        return run.failures(await run.lockout.attempt(run.subject, verify))
+
+    if recipe["op"] == "attempt":
+        run.allowed = sum(a.allowed for a in await each(attempt))
+    elif recipe["op"] == "gate":
+
+        async def begin(_: int) -> Any:
+            return run.failures(await run.lockout.begin(run.subject))
+
+        gates = await each(begin)
+        run.allowed = sum(gate.allowed for gate in gates)
+
+        async def fail(i: int) -> Any:
+            return run.failures(await gates[i].fail())
+
+        await each(fail)
+    elif recipe["op"] == "check_all":
+
+        async def check(_: int) -> Any:
+            return run.failures(await check_all_async(run.entries()))
+
+        run.allowed = sum(result.allowed for result in await each(check))
+    else:
+
+        async def open_(_: int) -> Any:
+            return run.failures(await reserve_all_async(run.entries()))
+
+        pendings = await each(open_)
+        run.allowed = sum(pending.allowed for pending in pendings)
+        committing = run.committing(pendings)
+
+        async def settle(index: int) -> None:
+            if index in committing:
+                run.failures(await pendings[index].commit())
+            else:
+                run.cancelled(await pendings[index].cancel())
+
+        await each(settle)
+    levels = {}
+    for name in vector["limiters"]:
+        key, params = run.seen[name]
+        raw = store.peek(key, params, run.now)
+        level = (await raw if inspect.isawaitable(raw) else raw).level
+        assert level is not None
+        levels[name] = level
+    run.check(levels)
+
+
 def run_concurrency(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> None:
+    if "recipe" in vector:
+        _concurrent_recipe(vector, store, salt_suffix)
+        return
     limiter = Limiter(
         **policy_of(vector),
         store=store,
@@ -258,6 +505,9 @@ def run_concurrency(vector: dict[str, Any], store: Any, salt_suffix: str = "") -
 
 
 async def run_concurrency_async(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> None:
+    if "recipe" in vector:
+        await _concurrent_recipe_async(vector, store, salt_suffix)
+        return
     limiter = AsyncLimiter(
         **policy_of(vector),
         store=store,
