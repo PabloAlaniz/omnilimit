@@ -80,7 +80,12 @@ class AsyncStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    """The outcome of one check. `status` is what to answer with when denied."""
+    """The outcome of one check. `status` is what to answer with when denied.
+
+    `shadowed` is `True` when a limiter in shadow mode let the request through although it would
+    have denied it: `allowed` is then `True` and `status` `None`, while `reason`, `remaining`,
+    `reset_ms` and `retry_after_ms` keep the values of the denial.
+    """
 
     allowed: bool
     reason: Reason
@@ -90,6 +95,7 @@ class Decision:
     retry_after_ms: int | None
     tier: Tier
     headers: dict[str, str] = field(default_factory=dict)
+    shadowed: bool = False
 
 
 class Reservation:
@@ -122,8 +128,8 @@ class Reservation:
 class Reserved:
     """What `reserve` answers: the decision `check` would give, and the reservation.
 
-    `reservation` is `None` when nothing was counted: the request was denied, or allowed by
-    `on_store_error="open"` after a store failure.
+    `reservation` is `None` when nothing was counted: the request was denied, shadowed or not, or
+    allowed by `on_store_error="open"` after a store failure.
     """
 
     decision: Decision
@@ -146,7 +152,9 @@ class LimiterEvent:
     """Observability event. `error` is only set for `store_error`.
 
     `op` is the limiter method the event comes from, and `reserve` reports as `check`. A
-    successful `reset` emits type `reset`, and a successful `refund` type `refund`.
+    successful `reset` emits type `reset`, and a successful `refund` type `refund`. `shadowed` is
+    `True` only on the event of a decision that shadow mode let through: a `limited` one, or a
+    `store_error` under `on_store_error="closed"`.
     """
 
     type: Literal["allowed", "limited", "store_error", "reset", "refund"]
@@ -154,6 +162,7 @@ class LimiterEvent:
     tier: Tier
     error: Exception | None = None
     op: Op = "check"
+    shadowed: bool = False
 
 
 HeaderOption = HeaderProfile | Callable[[HeaderInput], dict[str, str]]

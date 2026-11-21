@@ -264,3 +264,12 @@ def test_a_bare_scope_without_client_or_headers() -> None:
     assert (b"ratelimit", b'"t";r=0;t=60') in sent[0]["headers"]
     asyncio.run(middleware({"type": "http"}, receive, send))
     assert sent[2]["status"] == 429
+
+
+@pytest.mark.parametrize("kind", [Limiter, AsyncLimiter], ids=["sync", "async"])
+def test_shadow_mode_passes_what_it_would_deny_without_headers(kind: Any) -> None:
+    client = _client(limiter=kind(**POLICY, store=MemoryStore(), shadow=True))
+    for _ in range(3):
+        response = client.get("/", headers=CF)
+        assert response.status_code == 200
+        assert not [h for h in response.headers if "ratelimit" in h or h == "retry-after"]

@@ -65,6 +65,12 @@ def policy_of(vector: dict[str, Any]) -> dict[str, int]:
     return {"limit": policy["limit"], "window_ms": policy["window_ms"], "burst": policy["burst"]}
 
 
+def shadowed_field(decision: Any) -> dict[str, Any]:
+    """Vectors write `shadowed` only where it is true."""
+    assert isinstance(decision.shadowed, bool), "every decision says whether it was shadowed"
+    return {"shadowed": True} if decision.shadowed else {}
+
+
 def outcome(decision: Any, raw: RawHit | None, profiles: dict[str, Any]) -> dict[str, Any]:
     return {
         "allowed": decision.allowed,
@@ -73,6 +79,7 @@ def outcome(decision: Any, raw: RawHit | None, profiles: dict[str, Any]) -> dict
         "remaining": decision.remaining,
         "reset_ms": decision.reset_ms,
         "retry_after_ms": decision.retry_after_ms,
+        **shadowed_field(decision),
         "state": {"level": raw.level if raw else None, "ts": raw.ts if raw else None},
         "headers": profiles,
     }
@@ -140,6 +147,7 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
         on_store_error="closed",
         store_timeout_ms=10_000,
         headers=recording.headers,
+        shadow=vector.get("shadow", False),
     )
     refunded = _refunded(vector)
     reservations: dict[int, Reservation | None] = {}
@@ -157,12 +165,18 @@ def run_sequence(vector: dict[str, Any], store: Any, salt_suffix: str = "") -> N
             assert recording.refund_calls - calls == int(done), context
             continue
         recording.raw = None
+        # A shadow limiter never calls the header function, so nothing may carry over.
+        recording.profiles = {"draft-11": {}, "legacy": {}}
         cost = step.get("cost", 1)
         if op == "peek":
             decision = limiter.peek(step["id"], now_ms=step["at_ms"], cost=cost)
         elif index in refunded:
             reserved = limiter.reserve(step["id"], now_ms=step["at_ms"], cost=cost)
-            assert (reserved.reservation is None) is not step["expect"]["allowed"], context
+            # Only what the store counted is a reservation: not a denial, shadowed or not.
+            expect = step["expect"]
+            assert (reserved.reservation is None) is (
+                not expect["allowed"] or expect.get("shadowed", False)
+            ), context
             reservations[index] = reserved.reservation
             decision = reserved.decision
         else:
@@ -208,6 +222,7 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
         on_store_error="closed",
         store_timeout_ms=10_000,
         headers=recording.headers,
+        shadow=vector.get("shadow", False),
     )
     refunded = _refunded(vector)
     reservations: dict[int, Reservation | None] = {}
@@ -224,12 +239,18 @@ async def run_sequence_async(vector: dict[str, Any], store: Any, salt_suffix: st
             assert recording.refund_calls - calls == int(done), context
             continue
         recording.raw = None
+        # A shadow limiter never calls the header function, so nothing may carry over.
+        recording.profiles = {"draft-11": {}, "legacy": {}}
         cost = step.get("cost", 1)
         if op == "peek":
             decision = await limiter.peek(step["id"], now_ms=step["at_ms"], cost=cost)
         elif index in refunded:
             reserved = await limiter.reserve(step["id"], now_ms=step["at_ms"], cost=cost)
-            assert (reserved.reservation is None) is not step["expect"]["allowed"], context
+            # Only what the store counted is a reservation: not a denial, shadowed or not.
+            expect = step["expect"]
+            assert (reserved.reservation is None) is (
+                not expect["allowed"] or expect.get("shadowed", False)
+            ), context
             reservations[index] = reserved.reservation
             decision = reserved.decision
         else:
@@ -531,6 +552,7 @@ def short_decision(decision: Decision) -> dict[str, Any]:
         "remaining": decision.remaining,
         "reset_ms": decision.reset_ms,
         "retry_after_ms": decision.retry_after_ms,
+        **shadowed_field(decision),
     }
 
 
@@ -624,6 +646,7 @@ class RecipeHarness:
                 salt=salt,
                 on_store_error=config["on_store_error"],
                 store_timeout_ms=self.timeout_ms,
+                shadow=config.get("shadow", False),
             )
             self.raw[name] = (inner, policy, key)
         self.handles: dict[str, Any] = {}
