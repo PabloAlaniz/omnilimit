@@ -77,6 +77,12 @@ export interface Decision {
   retryAfterMs: number | null;
   headers: Record<string, string>;
   tier: Tier;
+  /**
+   * `true` when a limiter in shadow mode let this request through although it would have denied
+   * it: `allowed` is `true` and `status` is `null`, while `reason`, `remaining`, `resetMs` and
+   * `retryAfterMs` keep the values of the denial. `false` for every other decision.
+   */
+  shadowed: boolean;
 }
 
 export type HeaderProfile = 'draft-11' | 'legacy' | 'none';
@@ -93,11 +99,16 @@ export interface HeaderInput {
 /** The limiter operation an event comes from. `reserve` reports as `check`. */
 export type LimiterOp = 'check' | 'peek' | 'reset' | 'refund';
 
+/**
+ * `shadowed` is set, to `true`, only on the event of a decision that shadow mode let through: a
+ * `limited` one, or a `store_error` under `onStoreError: 'closed'`.
+ */
 export type LimiterEvent =
-  | { type: 'allowed' | 'limited'; op: 'check' | 'peek'; scope: string; tier: Tier }
+  | { type: 'allowed'; op: 'check' | 'peek'; scope: string; tier: Tier }
+  | { type: 'limited'; op: 'check' | 'peek'; scope: string; tier: Tier; shadowed?: true }
   | { type: 'reset'; op: 'reset'; scope: string; tier: Tier }
   | { type: 'refund'; op: 'refund'; scope: string; tier: Tier }
-  | { type: 'store_error'; op: LimiterOp; scope: string; tier: Tier; error: unknown };
+  | { type: 'store_error'; op: LimiterOp; scope: string; tier: Tier; error: unknown; shadowed?: true };
 
 export interface LimiterOptions extends Policy {
   store: Store;
@@ -116,6 +127,13 @@ export interface LimiterOptions extends Policy {
   salt?: string;
   /** Observability hook. Exceptions it throws are ignored. */
   onEvent?: (event: LimiterEvent) => void;
+  /**
+   * Decide and count as usual, but never deny: a request that would be limited, or refused by
+   * `onStoreError: 'closed'`, is allowed with `shadowed: true`, and its event is marked
+   * `shadowed`. Decisions carry no headers, so clients do not see a limit that is not enforced.
+   * Use it to roll a limit out and watch what it would do. Defaults to `false`.
+   */
+  shadow?: boolean;
 }
 
 /**
@@ -162,7 +180,8 @@ export interface Limiter {
   reset(id: string): Promise<boolean>;
   /**
    * `check`, keeping what is needed to give the request back with `refund` if its work does not
-   * happen. The decision is the one `check` would give. Throws a `TypeError` if the store cannot
+   * happen. The decision is the one `check` would give, and a shadowed one holds no reservation,
+   * since nothing was counted. Throws a `TypeError` if the store cannot
    * refund (approximate stores), before counting anything.
    */
   reserve(id: string, options?: { nowMs?: number; cost?: number }): Promise<Reserved>;

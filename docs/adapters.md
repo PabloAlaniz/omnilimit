@@ -145,6 +145,8 @@ Depends(rate_limit(limiter, key=key, on_missing_key="shared", skip=lambda ctx: c
 
 Keep the condition narrow. A `skip` that is true in production is a limit that does nothing, and unlike a store failure it emits no event.
 
+To find out what a limit would do before it does it, use a limiter with `shadow: true` (`shadow=True` in Python) instead of `skip`. It counts every request and reports, through `onEvent`, the ones it would deny. The adapters let those requests through without rate limit headers. See [shadow mode](https://github.com/PabloAlaniz/omnilimit/blob/main/spec/SPEC.md#shadow-mode).
+
 ## Requests that weigh more than one
 
 `cost` returns how many units a request spends, for endpoints that do several things at once:

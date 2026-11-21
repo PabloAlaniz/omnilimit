@@ -70,6 +70,7 @@ class _Core:
         headers: HeaderOption,
         salt: str,
         on_event: EventHook | None,
+        shadow: bool,
     ) -> None:
         self.policy = resolve_policy(limit, window_ms, burst)
         assert_scope(scope)
@@ -77,6 +78,9 @@ class _Core:
             raise ValueError("omnilimit: on_store_error is required: 'open' or 'closed'")
         if store_timeout_ms <= 0:
             raise ValueError("omnilimit: store_timeout_ms must be positive")
+        if not isinstance(shadow, bool):
+            raise TypeError("omnilimit: shadow must be a bool")
+        self.shadow = shadow
         self.tier: Tier = tier
         self.scope = scope
         self.on_store_error: OnStoreError = on_store_error
@@ -97,6 +101,9 @@ class _Core:
             self.on_event(event)
 
     def _finish(self, decision: Decision, effective_ms: int) -> Decision:
+        if self.shadow:
+            # A client must not see, and adapt to, a limit that is not enforced.
+            return self._shadowed(decision)
         data = HeaderInput(
             scope=self.scope,
             limit=self.policy.limit,
@@ -129,9 +136,21 @@ class _Core:
             drain_ms=policy.drain_ms,
         )
 
+    def _shadowed(self, decision: Decision) -> Decision:
+        """In shadow mode, a decision that would deny lets the request through, as it was."""
+        if decision.allowed:
+            return decision
+        return replace(decision, allowed=True, status=None, shadowed=True)
+
     def from_hit(self, hit: RawHit, op: Op = "check", amount: int | None = None) -> Decision:
+        decision = self._from_hit(hit, amount)
         event_type: Literal["allowed", "limited"] = "allowed" if hit.allowed else "limited"
-        self._emit(LimiterEvent(event_type, self.scope, self.tier, op=op))
+        self._emit(
+            LimiterEvent(event_type, self.scope, self.tier, op=op, shadowed=decision.shadowed)
+        )
+        return decision
+
+    def _from_hit(self, hit: RawHit, amount: int | None) -> Decision:
         base = Decision(
             allowed=hit.allowed,
             reason="ok" if hit.allowed else "limited",
@@ -158,7 +177,15 @@ class _Core:
         return self._finish(decision, view.effective_ms)
 
     def from_failure(self, error: Exception, op: Op = "check") -> Decision:
-        self.report_failure(error, op)
+        decision = self._from_failure()
+        self._emit(
+            LimiterEvent(
+                "store_error", self.scope, self.tier, error, op=op, shadowed=decision.shadowed
+            )
+        )
+        return decision
+
+    def _from_failure(self) -> Decision:
         # Reports nothing about quota: the store could not say anything about it.
         allowed = self.on_store_error == "open"
         decision = Decision(
@@ -184,7 +211,8 @@ class _Core:
     def reserved(
         self, decision: Decision, hit: RawHit | None, key: str, params: HitParams, cost: int
     ) -> Reserved:
-        # Only what the store counted can be given back: not a denial, not an `open` failure.
+        # Only what the store counted can be given back: not a denial, shadowed or not, and not
+        # an `open` failure.
         if hit is None or not hit.allowed or hit.ts is None:
             return Reserved(decision, None)
         reservation = Reservation(
@@ -249,6 +277,11 @@ class Limiter:
 
     `on_store_error` is required on purpose: a login route usually wants `closed`, a public
     read route usually wants `open`. Configure socket timeouts on your store's client too.
+
+    With `shadow=True` the limiter decides and counts as usual but never denies: a request that
+    would be limited, or refused by `on_store_error="closed"`, is allowed with `shadowed=True` and
+    its event is marked `shadowed`. Decisions carry no headers, so clients do not see a limit that
+    is not enforced. Use it to roll a limit out and watch what it would do.
     """
 
     def __init__(
@@ -265,6 +298,7 @@ class Limiter:
         headers: HeaderOption = "draft-11",
         salt: str = "",
         on_event: EventHook | None = None,
+        shadow: bool = False,
     ) -> None:
         if inspect.iscoroutinefunction(store.hit):
             raise TypeError("omnilimit: this store is async: use AsyncLimiter")
@@ -282,6 +316,7 @@ class Limiter:
             headers=headers,
             salt=salt,
             on_event=on_event,
+            shadow=shadow,
         )
         self._slots = threading.BoundedSemaphore(max_store_threads)
 
@@ -404,6 +439,7 @@ class AsyncLimiter:
         headers: HeaderOption = "draft-11",
         salt: str = "",
         on_event: EventHook | None = None,
+        shadow: bool = False,
     ) -> None:
         if not inspect.iscoroutinefunction(store.hit) and store.tier != "local":
             raise TypeError("omnilimit: this store would block the event loop: use its async form")
@@ -419,6 +455,7 @@ class AsyncLimiter:
             headers=headers,
             salt=salt,
             on_event=on_event,
+            shadow=shadow,
         )
 
     @property

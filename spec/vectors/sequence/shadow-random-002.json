@@ -1,0 +1,275 @@
+{
+ "spec": "1",
+ "id": "sequence/shadow-random-002",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 10,
+  "window_ms": 10000,
+  "burst": 10
+ },
+ "scope": "t",
+ "salt": "s",
+ "shadow": true,
+ "steps": [
+  {
+   "at_ms": 1700000001878,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 9,
+    "reset_ms": 1000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 10000,
+     "ts": 1700000001878
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000002878,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 8,
+    "reset_ms": 2000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 20000,
+     "ts": 1700000002878
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000002878,
+   "id": "a",
+   "op": "refund",
+   "of": 0,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 20000,
+     "ts": 1700000002878
+    }
+   }
+  },
+  {
+   "at_ms": 1700000002878,
+   "id": "b",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 9,
+    "reset_ms": 1000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 10000,
+     "ts": 1700000002878
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000003211,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 7,
+    "reset_ms": 2667,
+    "retry_after_ms": null,
+    "state": {
+     "level": 26670,
+     "ts": 1700000003211
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000004211,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 7,
+    "reset_ms": 2667,
+    "retry_after_ms": null,
+    "state": {
+     "level": 26670,
+     "ts": 1700000004211
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000004212,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 5,
+    "reset_ms": 4666,
+    "retry_after_ms": null,
+    "state": {
+     "level": 46660,
+     "ts": 1700000004212
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000004212,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 3,
+    "reset_ms": 6666,
+    "retry_after_ms": null,
+    "state": {
+     "level": 66660,
+     "ts": 1700000004212
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000004212,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 2,
+    "reset_ms": 7666,
+    "retry_after_ms": null,
+    "state": {
+     "level": 76660,
+     "ts": 1700000004212
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000004212,
+   "id": "b",
+   "op": "reset"
+  },
+  {
+   "at_ms": 1700000004229,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 8649,
+    "retry_after_ms": null,
+    "state": {
+     "level": 86490,
+     "ts": 1700000004229
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000005229,
+   "id": "b",
+   "op": "refund",
+   "of": 3,
+   "expect": {
+    "refunded": true,
+    "state": {
+     "level": 0,
+     "ts": 1700000005229
+    }
+   }
+  },
+  {
+   "at_ms": 1700000005229,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 9649,
+    "retry_after_ms": null,
+    "state": {
+     "level": 96490,
+     "ts": 1700000005229
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000005229,
+   "id": "b",
+   "op": "peek",
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 10,
+    "reset_ms": 0,
+    "retry_after_ms": null,
+    "state": {
+     "level": 0,
+     "ts": 1700000005229
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  }
+ ]
+}

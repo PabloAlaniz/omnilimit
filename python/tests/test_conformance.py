@@ -19,6 +19,7 @@ from support import (
     run_recipe_async,
     run_sequence,
     run_sequence_async,
+    shadowed_field,
     vectors_of,
 )
 
@@ -165,6 +166,7 @@ def _failure_view(decision: Any) -> dict[str, Any]:
         "remaining": decision.remaining,
         "reset_ms": decision.reset_ms,
         "retry_after_ms": decision.retry_after_ms,
+        **shadowed_field(decision),
         "headers": decision.headers,
     }
 
@@ -246,6 +248,7 @@ def test_failure(vector: dict[str, Any]) -> None:
         scope="t",
         on_store_error=vector["on_store_error"],
         store_timeout_ms=20,
+        shadow=vector.get("shadow", False),
     )
     try:
         assert _failure_view(limiter.check("a")) == vector["expect"]
@@ -262,6 +265,7 @@ def test_failure_async(vector: dict[str, Any]) -> None:
         scope="t",
         on_store_error=vector["on_store_error"],
         store_timeout_ms=20,
+        shadow=vector.get("shadow", False),
     )
     assert _failure_view(asyncio.run(limiter.check("a"))) == vector["expect"]
 

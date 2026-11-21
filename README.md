@@ -151,6 +151,28 @@ createLimiter({ ...parsePolicy(process.env.API_LIMIT ?? '100/minute'), store, sc
 
 `10/minute`, `5/15minute` and `1000/day` are valid; `10/min`, `10 / minute` and `10/minutes` are not. See the [spec](spec/SPEC.md#policy-shorthand).
 
+### Watch a limit before enforcing it
+
+A new limit on traffic that already exists can turn away more than you expect. `shadow: true` decides and counts as usual but never denies:
+
+```ts
+const api = createLimiter({
+  ...parsePolicy('100/minute'),
+  store,
+  scope: 'api',
+  onStoreError: 'open',
+  shadow: true,
+  onEvent: (event) => {
+    if (event.shadowed) log.warn('api limit would deny', event);
+  },
+});
+
+const decision = await api.check(userId);
+// decision.allowed is true; decision.shadowed says whether enforcement would have said no.
+```
+
+A request that would be limited, or refused by `onStoreError: 'closed'`, comes back allowed with `shadowed: true`, keeping the denial's `reason`, `remaining` and `retryAfterMs`. Its event is marked `shadowed`. The store sees the same calls as under enforcement, so the counters fill as they would. No rate limit headers are sent, so clients cannot react to a limit that is not enforced. A shadowed request counted nothing, so it is not a reservation. Recipes treat a shadowed decision as allowed, and a limit can be shadowed next to others that enforce. Remove `shadow` to enforce. See the [spec](spec/SPEC.md#shadow-mode).
+
 ## Pick a store
 
 | Store | Import | Tier | Use it for |

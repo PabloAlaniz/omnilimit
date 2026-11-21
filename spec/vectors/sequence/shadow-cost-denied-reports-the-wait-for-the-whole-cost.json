@@ -1,0 +1,126 @@
+{
+ "spec": "1",
+ "id": "sequence/shadow-cost-denied-reports-the-wait-for-the-whole-cost",
+ "kind": "sequence",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "policy": {
+  "limit": 4,
+  "window_ms": 4000,
+  "burst": 4
+ },
+ "scope": "t",
+ "salt": "s",
+ "shadow": true,
+ "steps": [
+  {
+   "at_ms": 1700000000000,
+   "id": "a",
+   "cost": 3,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 3000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 12000,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000000,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "limited",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 3000,
+    "retry_after_ms": 1000,
+    "shadowed": true,
+    "state": {
+     "level": 12000,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000000500,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "limited",
+    "status": null,
+    "remaining": 1,
+    "reset_ms": 2500,
+    "retry_after_ms": 500,
+    "shadowed": true,
+    "state": {
+     "level": 10000,
+     "ts": 1700000000000
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000001000,
+   "id": "a",
+   "cost": 2,
+   "expect": {
+    "allowed": true,
+    "reason": "ok",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 4000,
+    "retry_after_ms": null,
+    "state": {
+     "level": 16000,
+     "ts": 1700000001000
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  },
+  {
+   "at_ms": 1700000001000,
+   "id": "a",
+   "expect": {
+    "allowed": true,
+    "reason": "limited",
+    "status": null,
+    "remaining": 0,
+    "reset_ms": 4000,
+    "retry_after_ms": 1000,
+    "shadowed": true,
+    "state": {
+     "level": 16000,
+     "ts": 1700000001000
+    },
+    "headers": {
+     "draft-11": {},
+     "legacy": {}
+    }
+   }
+  }
+ ]
+}

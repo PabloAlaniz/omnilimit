@@ -9,7 +9,7 @@ import { createLimiter } from '../../src/core/limiter.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
 import { canonicalIp, maskIp, resolveClientIp } from '../../src/ip/index.js';
 import type { Store } from '../../src/core/types.js';
-import { allVectors, runConcurrency, runRecipe, runSequence, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
+import { allVectors, runConcurrency, runRecipe, runSequence, shadowedField, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
 
 describe('vector files', () => {
   it('cover every kind', () => {
@@ -114,6 +114,7 @@ describe('failure vectors', () => {
       scope: 't',
       onStoreError: vector.on_store_error,
       storeTimeoutMs: 20,
+      shadow: vector.shadow ?? false,
     });
     const d = await limiter.check('a');
     expect({
@@ -123,6 +124,7 @@ describe('failure vectors', () => {
       remaining: d.remaining,
       reset_ms: d.resetMs,
       retry_after_ms: d.retryAfterMs,
+      ...shadowedField(d),
       headers: d.headers,
     }).toEqual(vector.expect);
   });

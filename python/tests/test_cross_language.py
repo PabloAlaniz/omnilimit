@@ -62,6 +62,7 @@ def typescript(store: str, url: str, vector: dict[str, Any], salt: str, steps: l
         "url": url,
         "policy": vector["policy"],
         "scope": vector["scope"],
+        "shadow": vector.get("shadow", False),
         "salt": salt,
         "steps": steps,
     }
@@ -109,7 +110,8 @@ def expected(step: dict[str, Any]) -> dict[str, Any]:
         return {"reset": True}
     if step.get("op") == "refund":
         return dict(step["expect"])
-    return {key: step["expect"][key] for key in DECISION}
+    # Vectors write `shadowed` only where it is true.
+    return {key: step["expect"][key] for key in (*DECISION, "shadowed") if key in step["expect"]}
 
 
 def split(
@@ -209,6 +211,7 @@ def take_turns(store_name: str, url: str, store: Any, vector: dict[str, Any], fi
         limit=policy["limit"],
         window_ms=policy["window_ms"],
         burst=policy["burst"],
+        shadow=vector.get("shadow", False),
     )
     params = resolve_policy(**policy)
     steps = vector["steps"]
@@ -265,6 +268,7 @@ def take_turns(store_name: str, url: str, store: Any, vector: dict[str, Any], fi
                     "remaining": d.remaining,
                     "reset_ms": d.reset_ms,
                     "retry_after_ms": d.retry_after_ms,
+                    **({"shadowed": True} if d.shadowed else {}),
                     "state": {"level": recorded.raw.level, "ts": recorded.raw.ts},
                 }
             assert got == expected(step), f"{vector['id']} step {index} (python)"

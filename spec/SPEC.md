@@ -405,6 +405,37 @@ default only when its normal latency does not fit the general one.
 | `open` | true | `store_error` | none | none |
 | `closed` | false | `store_error` | 503 | `Retry-After: 1` |
 
+## Shadow mode
+
+A limiter can run in shadow mode, to roll a limit out without enforcing it: it decides as an
+enforcing limiter would, and lets the request through when that decision would turn it away.
+Shadow mode is off unless the limiter is created with it.
+
+- **Store calls are unchanged.** A shadow limiter makes the same calls with the same arguments
+  as an enforcing one, so its counters hold what the same traffic would leave in them under
+  enforcement. A denied hit still writes nothing.
+- **A decision that would deny is shadowed.** A denial (`limited`), and a `closed` store failure,
+  become `allowed: true` with `status: null` and `shadowed: true`. `reason`, `remaining`,
+  `reset_ms` and `retry_after_ms` keep the values of the decision they replace, so the caller
+  can log what enforcement would have answered. Every other decision has `shadowed: false`, a
+  shadow limiter's allowed ones and `open` failures included.
+- **No headers.** Every decision of a shadow limiter has empty headers, allowed or shadowed, in
+  every profile and with a custom header function, which is not called. A client must not see,
+  and adapt to, a limit that is not enforced.
+- **Peek** is shadowed like a hit. **Reset** and **refund** do not decide, and are unchanged.
+- **Reserve.** A shadowed hit wrote nothing, so it is not a reservation, as with an `open`
+  failure.
+- **Events.** The event of a shadowed decision is the one an enforcing limiter would emit
+  (`limited`, or `store_error`), marked `shadowed`. No other event is marked.
+
+Recipes need no rule of their own: they see a shadowed decision as the allowed decision it is.
+A combined check does not stop at it, a reserve mode refunds nothing for it, and a lockout whose
+limits are all shadowed runs every verification. Limiters in shadow mode and enforcing ones can be
+mixed in one recipe, which enforces only the latter.
+
+Vectors write `shadowed` only where it is `true`: a sequence or failure vector with `"shadow":
+true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
+
 ## Client IP
 
 - `xff` with `hops`: split on commas, trim, take the entry `hops` positions from the right.

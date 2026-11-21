@@ -19,6 +19,7 @@
           "policy": { "$ref": "#/definitions/policy" },
           "scope": { "type": "string" },
           "salt": { "type": "string" },
+          "shadow": { "const": true, "description": "Absent means the limiter enforces." },
           "steps": {
             "type": "array",
             "minItems": 1,
@@ -115,6 +116,7 @@
           "op": { "const": "refund", "description": "Absent means check. A refund fails after its hit succeeded." },
           "fault": { "enum": ["error", "timeout", "missing_binding"] },
           "on_store_error": { "enum": ["open", "closed"] },
+          "shadow": { "const": true, "description": "Absent means the limiter enforces." },
           "policy": { "$ref": "#/definitions/policy" }
         },
         "if": { "required": ["op"] },
@@ -190,7 +192,8 @@
                 "scope": { "type": "string" },
                 "policy": { "$ref": "#/definitions/policy" },
                 "on_store_error": { "enum": ["open", "closed"] },
-                "tier": { "const": "approximate", "description": "Absent means the store under test." }
+                "tier": { "const": "approximate", "description": "Absent means the store under test." },
+                "shadow": { "const": true, "description": "Absent means the limiter enforces." }
               }
             }
           },
@@ -293,7 +296,8 @@
         "status": { "enum": [null, 429, 503] },
         "remaining": { "type": ["integer", "null"] },
         "reset_ms": { "type": ["integer", "null"] },
-        "retry_after_ms": { "type": ["integer", "null"] }
+        "retry_after_ms": { "type": ["integer", "null"] },
+        "shadowed": { "const": true, "description": "Written only when true: a shadow limiter let a request through that it would have denied." }
       }
     },
     "recipe_step": {
@@ -428,6 +432,7 @@
         "remaining": { "type": ["integer", "null"] },
         "reset_ms": { "type": ["integer", "null"] },
         "retry_after_ms": { "type": ["integer", "null"] },
+        "shadowed": { "const": true, "description": "Written only when true: a shadow limiter let a request through that it would have denied." },
         "headers": { "type": "object" }
       }
     }

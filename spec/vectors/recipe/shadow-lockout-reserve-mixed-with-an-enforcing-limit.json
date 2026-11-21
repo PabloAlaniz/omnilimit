@@ -1,0 +1,371 @@
+{
+ "spec": "1",
+ "id": "recipe/shadow-lockout-reserve-mixed-with-an-enforcing-limit",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "subject": {
+   "scope": "subject",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 1
+   },
+   "on_store_error": "closed",
+   "shadow": true
+  },
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 3,
+    "window_ms": 60000,
+    "burst": 3
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "lockouts": {
+  "login": {
+   "limits": [
+    {
+     "limiter": "subject"
+    },
+    {
+     "limiter": "ip",
+     "reset_on_success": false
+    }
+   ],
+   "mode": "reserve"
+  }
+ },
+ "timeline": [
+  {
+   "op": "attempt",
+   "at_ms": 1700000000000,
+   "lockout": "login",
+   "ids": [
+    "u",
+    "a"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "subject",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 20000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "u",
+    "a"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "subject",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 40000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "u",
+    "a"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "subject",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "verified": false,
+     "verify_ran": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "attempt",
+   "lockout": "login",
+   "ids": [
+    "u",
+    "a"
+   ],
+   "verify": false,
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "subject",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "verified": null,
+     "verify_ran": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 20000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "gate",
+   "lockout": "login",
+   "ids": [
+    "u",
+    "b"
+   ],
+   "handle": "g",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "subject",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 20000,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "succeed",
+   "handle": "g",
+   "expect": {
+    "calls": [
+     {
+      "op": "reset",
+      "limiter": "subject",
+      "id": "u"
+     },
+     {
+      "op": "refund",
+      "limiter": "ip",
+      "id": "b"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 2,
+       "reset_ms": 20000,
+       "retry_after_ms": null
+      }
+     ],
+     "resets": [
+      true,
+      null
+     ],
+     "refunded": [
+      null,
+      true
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "subject",
+   "id": "u",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 180000,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "b",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  }
+ ]
+}

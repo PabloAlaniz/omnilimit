@@ -34,6 +34,16 @@ describe('hono', () => {
     expect(await denied.json()).toEqual({ error: 'rate_limited' });
   });
 
+  it('in shadow mode, passes a request it would deny, without headers', async () => {
+    const shadow = createLimiter({ limit: 1, windowMs: 60_000, store: memoryStore(), scope: 'a', onStoreError: 'closed', shadow: true });
+    const app = build({ limiter: shadow });
+    for (let i = 0; i < 3; i++) {
+      const response = await app.request('/', { headers: cf('203.0.113.1') });
+      expect(response.status).toBe(200);
+      expect([...response.headers.keys()].filter((name) => name.includes('ratelimit') || name === 'retry-after')).toEqual([]);
+    }
+  });
+
   it('rejects an unidentified client when asked to', async () => {
     const response = await build().request('/');
     expect(response.status).toBe(400);

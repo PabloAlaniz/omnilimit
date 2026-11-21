@@ -77,6 +77,7 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
     salt: `${vector.salt}${saltSuffix}`,
     onStoreError: 'closed',
     storeTimeoutMs: 10_000,
+    shadow: vector.shadow ?? false,
     headers: (input) => {
       profiles = { 'draft-11': buildHeaders('draft-11', input), legacy: buildHeaders('legacy', input) };
       return {};
@@ -102,11 +103,14 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
       continue;
     }
     const options = { nowMs: step.at_ms, ...(step.cost ? { cost: step.cost } : {}) };
+    // A shadow limiter never calls the header function, so nothing may carry over from a step before.
+    profiles = { 'draft-11': {}, legacy: {} };
     let decision;
     if (step.op === 'peek') decision = await limiter.peek(step.id, options);
     else if (refunded.has(index)) {
       const reserved = await limiter.reserve(step.id, options);
-      expect(reserved.reservation === null, context).toBe(!step.expect.allowed);
+      // Only what the store counted is a reservation: not a denial, shadowed or not.
+      expect(reserved.reservation === null, context).toBe(!step.expect.allowed || step.expect.shadowed === true);
       reservations.set(index, reserved.reservation);
       decision = reserved.decision;
     } else decision = await limiter.check(step.id, options);
@@ -119,6 +123,7 @@ export async function runSequence(vector: Vector, store: Store, saltSuffix = '')
         remaining: decision.remaining,
         reset_ms: decision.resetMs,
         retry_after_ms: decision.retryAfterMs,
+        ...shadowedField(decision),
         state: { level: lastRaw?.level, ts: lastRaw?.ts },
         headers: profiles,
       },
@@ -170,6 +175,12 @@ export async function runConcurrency(vector: Vector, store: Store, saltSuffix = 
   expect(decisions.filter((decision) => decision.allowed)).toHaveLength(vector.expect_allowed);
 }
 
+/** Vectors write `shadowed` only where it is true. */
+export function shadowedField(d: Decision): { shadowed?: true } {
+  expect(typeof d.shadowed, 'every decision says whether it was shadowed').toBe('boolean');
+  return d.shadowed ? { shadowed: true } : {};
+}
+
 const shortDecision = (d: Decision) => ({
   allowed: d.allowed,
   reason: d.reason,
@@ -177,6 +188,7 @@ const shortDecision = (d: Decision) => ({
   remaining: d.remaining,
   reset_ms: d.resetMs,
   retry_after_ms: d.retryAfterMs,
+  ...shadowedField(d),
 });
 
 function combined(result: CombinedDecision) {
@@ -247,6 +259,7 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
       salt,
       onStoreError: config.on_store_error,
       storeTimeoutMs,
+      shadow: config.shadow ?? false,
     });
     raw[name] = { store: inner, params: policy, key };
   }

@@ -58,6 +58,15 @@ if reserved.decision.allowed:
 
 `reserve` decides like `check`, and its `reservation` is `None` when nothing was counted (a denial, or `on_store_error="open"` after a store failure). `refund` gives back what is left of the request after the meter drained since it was counted, so a bucket never ends up more generous than if the request had never happened. It returns `True` once applied, and `False` for `None`, for a reservation already refunded (without calling the store), or when the store failed or timed out; it never raises for a store failure and never retries, since a timed-out refund may have been applied. A reservation belongs to the limiter that made it: another one raises `TypeError`. A successful refund emits type `"refund"`, and `reserve` reports as `"check"`. With an asyncpg, SQLAlchemy or psycopg store, reapply `MIGRATION_SQL` when upgrading to 0.4 to add `omnilimit_refund_v1`.
 
+## Shadow mode
+
+```python
+limiter = Limiter(**parse_policy("100/minute"), store=store, scope="api", on_store_error="open", shadow=True)
+decision = limiter.check(user_id)  # always allowed; decision.shadowed says whether it would have been denied
+```
+
+A shadow limiter decides and counts like an enforcing one but never denies. A request that would be limited, or refused by `on_store_error="closed"`, is allowed with `shadowed=True`, and keeps the denial's `reason`, `remaining` and `retry_after_ms`. Its event has `shadowed=True`. Decisions carry no headers, so clients do not see a limit that is not enforced. A shadowed request counted nothing, so `reserve` gives no reservation for it. Use it to roll a limit out, watch the events, and then drop `shadow` to enforce.
+
 ## Recipes
 
 ```python

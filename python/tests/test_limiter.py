@@ -676,3 +676,115 @@ class TestReserveAndRefund:
         store.hit("c", params, now_ms=5003)  # evicts "a", the oldest write, despite its refund
         assert store.refund("a", params, 5000, now_ms=5004) == RawRefund(0, 5004)
         assert store.refund("b", params, 5001, now_ms=5004) == RawRefund(0, 5004)
+
+
+SHADOW: dict[str, Any] = {**BASE, "limit": 1, "shadow": True}
+
+
+class TestShadowMode:
+    SHADOW = SHADOW
+
+    def test_lets_a_denial_through_keeping_its_values_with_no_headers(self) -> None:
+        calls: list[Any] = []
+        limiter = Limiter(
+            **self.SHADOW,
+            store=MemoryStore(),
+            headers=lambda data: calls.append(data) or {"x": "1"},
+        )
+        first = limiter.check("a", now_ms=0)
+        assert (first.allowed, first.reason, first.shadowed, first.headers) == (
+            True,
+            "ok",
+            False,
+            {},
+        )
+        second = limiter.check("a", now_ms=0)
+        assert (second.allowed, second.reason, second.status, second.shadowed) == (
+            True,
+            "limited",
+            None,
+            True,
+        )
+        assert (second.remaining, second.reset_ms, second.retry_after_ms, second.headers) == (
+            0,
+            1000,
+            1000,
+            {},
+        )
+        assert limiter.peek("a", now_ms=0).shadowed is True
+        assert calls == []
+
+    def test_counts_exactly_what_an_enforcing_limiter_counts(self) -> None:
+        store = MemoryStore()
+        enforcing = Limiter(**{**BASE, "limit": 1, "scope": "e"}, store=store)
+        watching = Limiter(**{**self.SHADOW, "scope": "w"}, store=store)
+        for now in [0, 0, 0, 500, 1000, 1000, 1999]:
+            e, w = enforcing.check("a", now_ms=now), watching.check("a", now_ms=now)
+            assert (w.reason, w.remaining, w.reset_ms, w.retry_after_ms) == (
+                e.reason,
+                e.remaining,
+                e.reset_ms,
+                e.retry_after_ms,
+            )
+            assert w.allowed and w.shadowed is (not e.allowed)
+
+    def test_marks_only_the_events_of_shadowed_decisions(self) -> None:
+        events: list[LimiterEvent] = []
+        limiter = Limiter(**self.SHADOW, store=MemoryStore(), on_event=events.append)
+        limiter.check("a", now_ms=0)
+        limiter.check("a", now_ms=0)
+        limiter.reset("a")
+        assert [(e.type, e.shadowed) for e in events] == [
+            ("allowed", False),
+            ("limited", True),
+            ("reset", False),
+        ]
+
+    def test_closed_failure_goes_through_and_open_is_unchanged(self) -> None:
+        class Down:
+            tier = "exact"
+
+            def hit(self, *args: Any) -> RawHit:
+                raise ConnectionError("down")
+
+        events: list[LimiterEvent] = []
+        closed = Limiter(**self.SHADOW, store=Down(), on_event=events.append).check("a")
+        assert (
+            closed.allowed,
+            closed.reason,
+            closed.status,
+            closed.retry_after_ms,
+            closed.shadowed,
+        ) == (
+            True,
+            "store_error",
+            None,
+            1000,
+            True,
+        )
+        opened = Limiter(
+            **{**self.SHADOW, "on_store_error": "open"}, store=Down(), on_event=events.append
+        ).check("a")
+        assert (opened.allowed, opened.shadowed) == (True, False)
+        assert [(e.type, e.shadowed) for e in events] == [
+            ("store_error", True),
+            ("store_error", False),
+        ]
+
+    def test_a_shadowed_hit_is_not_a_reservation(self) -> None:
+        limiter = Limiter(**self.SHADOW, store=MemoryStore())
+        assert limiter.reserve("a", now_ms=0).reservation is not None
+        shadowed = limiter.reserve("a", now_ms=0)
+        assert shadowed.decision.shadowed and shadowed.reservation is None
+
+    def test_async_limiter(self) -> None:
+        limiter = AsyncLimiter(**self.SHADOW, store=MemoryStore())
+
+        async def run() -> list[bool]:
+            return [(await limiter.check("a", now_ms=0)).shadowed for _ in range(3)]
+
+        assert asyncio.run(run()) == [False, True, True]
+
+    def test_rejects_a_shadow_that_is_not_a_bool(self) -> None:
+        with pytest.raises(TypeError, match="shadow"):
+            Limiter(**{**BASE, "shadow": "yes"}, store=MemoryStore())

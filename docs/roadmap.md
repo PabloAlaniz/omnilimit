@@ -7,6 +7,8 @@ behaviour across ports, verified by vectors from the independent generator.
 
 | Version | Contents |
 |---|---|
+| Next release | Shadow mode: decide and count, report through `onEvent`, but never deny |
+| 0.4 | `reserve` and `refund`, combined checks in two phases, lockouts over several limits |
 | 0.3 | See [done in 0.3](#done-in-03) |
 | 0.2 | `peek` and `reset`, and `onDenied` in every adapter |
 
@@ -33,7 +35,6 @@ Larger pieces, or ones that need a decision first.
 | Item | Why | Shape it would take |
 |---|---|---|
 | Local deny cache | A denied client should not cost a store round trip until it may retry | In-process "blocked until" map honouring `retryAfterMs`, opt-in, tier stays honest |
-| Shadow mode | Roll a limit out without enforcing it | Decide and report through `onEvent`, but allow |
 | Metrics | Dashboards without writing an `onEvent` hook | OpenTelemetry counters for allowed, limited, store error and latency |
 | Durable Object placement | Lower latency, data residency | `locationHint` and jurisdiction options for `durableObjectStore` |
 | Penalties | Repeat offenders wait longer | Escalating windows on top of peek and reset, if it can be specified without floats |
