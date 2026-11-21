@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.4.0...ts-v0.5.0) (2026-11-21)
+
+
+### Features
+
+* shadow mode ([#31](https://github.com/PabloAlaniz/omnilimit/issues/31)) ([c10c58d](https://github.com/PabloAlaniz/omnilimit/commit/c10c58d32c975bf55d3cf2d0932905c3505a2bc1))
+
 ## [0.4.0](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.3.1...ts-v0.4.0) (2026-11-20)
 
 
