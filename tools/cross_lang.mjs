@@ -52,6 +52,7 @@ const limiter = createLimiter({
   salt: request.salt,
   onStoreError: 'closed',
   storeTimeoutMs: 10_000,
+  shadow: request.shadow === true,
 });
 
 const refunded = new Set(request.steps.filter((step) => step.op === 'refund').map((step) => step.of));
@@ -84,6 +85,8 @@ for (const [index, step] of request.steps.entries()) {
     remaining: d.remaining,
     reset_ms: d.resetMs,
     retry_after_ms: d.retryAfterMs,
+    // Vectors write `shadowed` only where it is true.
+    ...(d.shadowed ? { shadowed: true } : {}),
     state: { level: raw?.level ?? null, ts: raw?.ts ?? null },
   });
 }
