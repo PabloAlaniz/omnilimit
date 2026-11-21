@@ -47,7 +47,7 @@ export default {
     });
 
     if (body.op === 'sequence') {
-      const limiter = createLimiter(options(body['policy'] as never, body['salt'] as string));
+      const limiter = createLimiter({ ...options(body['policy'] as never, body['salt'] as string), shadow: body['shadow'] === true });
       const out = [];
       type Step = { id: string; at_ms: number; op?: 'peek' | 'reset' | 'refund'; cost?: number; of?: number };
       const steps = body['steps'] as Step[];

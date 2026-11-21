@@ -255,6 +255,82 @@ describe('reserve and refund', () => {
   });
 });
 
+describe('shadow mode', () => {
+  const shadow = { ...base, shadow: true } as const;
+
+  it('lets a denial through, keeping its values, with no headers', async () => {
+    const headers = vi.fn(() => ({ 'x-custom': '1' }));
+    const limiter = createLimiter({ ...shadow, store: memoryStore(), headers });
+    const first = await limiter.check('a', { nowMs: 0 });
+    expect(first).toMatchObject({ allowed: true, reason: 'ok', shadowed: false, headers: {} });
+    const second = await limiter.check('a', { nowMs: 0 });
+    expect(second).toEqual({
+      allowed: true,
+      reason: 'limited',
+      status: null,
+      remaining: 0,
+      resetMs: 1000,
+      retryAfterMs: 1000,
+      headers: {},
+      tier: 'local',
+      shadowed: true,
+    });
+    expect((await limiter.peek('a', { nowMs: 0 })).shadowed).toBe(true);
+    expect(headers).not.toHaveBeenCalled();
+  });
+
+  it('counts exactly what an enforcing limiter counts', async () => {
+    const store = memoryStore();
+    const enforcing = createLimiter({ ...base, store, scope: 'e' });
+    const watching = createLimiter({ ...shadow, store, scope: 'w' });
+    for (const nowMs of [0, 0, 0, 500, 1000, 1000, 1999]) {
+      const [e, w] = [await enforcing.check('a', { nowMs }), await watching.check('a', { nowMs })];
+      expect({ ...w, allowed: e.allowed, status: e.status, headers: e.headers, shadowed: false }).toEqual(e);
+      expect(w.shadowed).toBe(!e.allowed);
+    }
+  });
+
+  it('marks only the events of shadowed decisions', async () => {
+    const events: unknown[] = [];
+    const limiter = createLimiter({ ...shadow, store: memoryStore(), onEvent: (e) => events.push(e) });
+    await limiter.check('a', { nowMs: 0 });
+    await limiter.check('a', { nowMs: 0 });
+    await limiter.reset('a');
+    expect(events).toEqual([
+      { type: 'allowed', op: 'check', scope: 't', tier: 'local' },
+      { type: 'limited', op: 'check', scope: 't', tier: 'local', shadowed: true },
+      { type: 'reset', op: 'reset', scope: 't', tier: 'local' },
+    ]);
+  });
+
+  it('lets a closed store failure through, and leaves an open one as it is', async () => {
+    const error = new Error('down');
+    const store: Store = { tier: 'exact', hit: () => Promise.reject(error) };
+    const events: unknown[] = [];
+    const closed = await createLimiter({ ...shadow, store, onEvent: (e) => events.push(e) }).check('a');
+    expect(closed).toMatchObject({ allowed: true, reason: 'store_error', status: null, retryAfterMs: 1000, shadowed: true, headers: {} });
+    const open = await createLimiter({ ...shadow, onStoreError: 'open', store, onEvent: (e) => events.push(e) }).check('a');
+    expect(open).toMatchObject({ allowed: true, reason: 'store_error', shadowed: false });
+    expect(events).toEqual([
+      { type: 'store_error', op: 'check', scope: 't', tier: 'exact', error, shadowed: true },
+      { type: 'store_error', op: 'check', scope: 't', tier: 'exact', error },
+    ]);
+  });
+
+  it('a shadowed hit is not a reservation', async () => {
+    const limiter = createLimiter({ ...shadow, store: memoryStore() });
+    expect((await limiter.reserve('a', { nowMs: 0 })).reservation).not.toBeNull();
+    const shadowed = await limiter.reserve('a', { nowMs: 0 });
+    expect(shadowed.decision.shadowed).toBe(true);
+    expect(shadowed.reservation).toBeNull();
+    expect(await limiter.refund(shadowed.reservation)).toBe(false);
+  });
+
+  it('rejects a shadow option that is not a boolean', () => {
+    expect(() => createLimiter({ ...base, store: memoryStore(), shadow: 'yes' as never })).toThrow(TypeError);
+  });
+});
+
 describe('memoryStore', () => {
   it('rejects invalid maxKeys', () => {
     expect(() => memoryStore({ maxKeys: 0 })).toThrow(RangeError);

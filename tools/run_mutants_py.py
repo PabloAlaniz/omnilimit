@@ -54,6 +54,30 @@ CORE = [
     ),
     ("clock regression refunds quota", "_gcra.py", "t = max(now_ms, ts)", "t = now_ms"),
     (
+        "shadow mode still denies",
+        "_limiter.py",
+        "            return self._shadowed(decision)\n",
+        "            return decision\n",
+    ),
+    (
+        "shadow mode sends headers",
+        "_limiter.py",
+        "        if self.shadow:\n            # A client must not see",
+        "        if False:\n            # A client must not see",
+    ),
+    (
+        "shadow mode keeps the denial status",
+        "_limiter.py",
+        "replace(decision, allowed=True, status=None, shadowed=True)",
+        "replace(decision, allowed=True, shadowed=True)",
+    ),
+    (
+        "shadow mode does not mark its events",
+        "_limiter.py",
+        "op=op, shadowed=decision.shadowed)",
+        "op=op)",
+    ),
+    (
         "cost is ignored",
         "_limiter.py",
         "window_ms=policy.window_ms * cost,",

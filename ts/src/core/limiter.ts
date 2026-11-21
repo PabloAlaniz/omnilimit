@@ -58,6 +58,7 @@ interface ReservationState {
 
 export function createLimiter(options: LimiterOptions): Limiter {
   const { store, scope, onStoreError, onEvent, salt = '' } = options;
+  const shadow = options.shadow ?? false;
   const headers = options.headers ?? 'draft-11';
   const storeTimeoutMs = options.storeTimeoutMs ?? store.defaultTimeoutMs ?? DEFAULT_STORE_TIMEOUT_MS;
   const policy = resolvePolicy(options);
@@ -65,6 +66,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
   if (onStoreError !== 'open' && onStoreError !== 'closed') {
     throw new TypeError("omnilimit: onStoreError is required and must be 'open' or 'closed'");
   }
+  if (typeof shadow !== 'boolean') throw new TypeError('omnilimit: shadow must be a boolean');
 
   const emit = (event: LimiterEvent): void => {
     try {
@@ -75,6 +77,8 @@ export function createLimiter(options: LimiterOptions): Limiter {
   };
 
   const finish = (decision: Omit<Decision, 'headers'>, effectiveMs: number): Decision => {
+    // A client must not see, and adapt to, a limit that is not enforced.
+    if (shadow) return { ...decision, headers: {} };
     const input: HeaderInput = { scope, limit: policy.limit, windowMs: policy.windowMs, decision, effectiveMs };
     const built = typeof headers === 'function' ? headers(input) : buildHeaders(headers, input);
     return { ...decision, headers: built };
@@ -86,7 +90,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
     if (hit.level === null) {
       const retryAfterMs = hit.allowed ? null : (hit.retryAfterMs ?? policy.windowMs);
       return finish(
-        { allowed: hit.allowed, reason, status, remaining: null, resetMs: null, retryAfterMs, tier: store.tier },
+        { allowed: hit.allowed, reason, status, remaining: null, resetMs: null, retryAfterMs, tier: store.tier, shadowed: false },
         retryAfterMs ?? 0,
       );
     }
@@ -100,6 +104,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
         resetMs: view.resetMs,
         retryAfterMs: view.retryAfterMs,
         tier: store.tier,
+        shadowed: false,
       },
       view.effectiveMs,
     );
@@ -117,10 +122,16 @@ export function createLimiter(options: LimiterOptions): Limiter {
         resetMs: null,
         retryAfterMs: allowed ? null : STORE_ERROR_RETRY_MS,
         tier: store.tier,
+        shadowed: false,
       },
       0,
     );
   };
+
+  /** In shadow mode, a decision that would deny lets the request through, keeping its values. */
+  const shadowed = (decision: Decision): Decision =>
+    shadow && !decision.allowed ? { ...decision, allowed: true, status: null, shadowed: true } : decision;
+  const marked = (decision: Decision): { shadowed?: true } => (decision.shadowed ? { shadowed: true } : {});
 
   /** The decision, and the store's answer when there was one (`null` after a store failure). */
   const decideRaw = async (
@@ -132,11 +143,14 @@ export function createLimiter(options: LimiterOptions): Limiter {
     try {
       hit = await withTimeout(run(), storeTimeoutMs);
     } catch (error) {
-      emit({ type: 'store_error', op, scope, tier: store.tier, error });
-      return { decision: fromFailure(), hit: null };
+      const decision = shadowed(fromFailure());
+      emit({ type: 'store_error', op, scope, tier: store.tier, error, ...marked(decision) });
+      return { decision, hit: null };
     }
-    emit({ type: hit.allowed ? 'allowed' : 'limited', op, scope, tier: store.tier });
-    return { decision: fromHit(hit, amount), hit };
+    const decision = shadowed(fromHit(hit, amount));
+    if (hit.allowed) emit({ type: 'allowed', op, scope, tier: store.tier });
+    else emit({ type: 'limited', op, scope, tier: store.tier, ...marked(decision) });
+    return { decision, hit };
   };
 
   const decide = async (op: 'check' | 'peek', amount: number, run: () => Promise<RawHit>): Promise<Decision> =>
@@ -194,7 +208,8 @@ export function createLimiter(options: LimiterOptions): Limiter {
       const params = weighed(reserveOptions?.cost);
       const key = await deriveKey(scope, policy, salt, id);
       const { decision, hit } = await decideRaw('check', params.windowMs, () => store.hit(key, params, reserveOptions?.nowMs));
-      // Only what the store counted can be given back: not a denial, not an `open` failure.
+      // Only what the store counted can be given back: not a denial, shadowed or not, and not an
+      // `open` failure.
       if (!hit?.allowed || hit.ts === null) return { decision, reservation: null };
       const reservation: Reservation = Object.freeze({ scope, cost: reserveOptions?.cost ?? 1 });
       reservations.set(reservation, { key, params, sinceMs: hit.ts, spent: false });

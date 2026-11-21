@@ -52,7 +52,16 @@ function compare(vector: Vector, decisions: Vector[]): void {
     }
     const want = vector.steps[index].expect;
     expect(
-      { allowed: d.allowed, reason: d.reason, status: d.status, remaining: d.remaining, reset_ms: d.resetMs, retry_after_ms: d.retryAfterMs, headers: d.headers },
+      {
+        allowed: d.allowed,
+        reason: d.reason,
+        status: d.status,
+        remaining: d.remaining,
+        reset_ms: d.resetMs,
+        retry_after_ms: d.retryAfterMs,
+        shadowed: d.shadowed,
+        headers: d.headers,
+      },
       `${vector.id} step ${index}`,
     ).toEqual({
       allowed: want.allowed,
@@ -61,6 +70,8 @@ function compare(vector: Vector, decisions: Vector[]): void {
       remaining: want.remaining,
       reset_ms: want.reset_ms,
       retry_after_ms: want.retry_after_ms,
+      // Vectors write `shadowed` only where it is true.
+      shadowed: want.shadowed ?? false,
       headers: want.headers['draft-11'],
     });
   });

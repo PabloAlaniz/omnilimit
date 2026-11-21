@@ -1,0 +1,274 @@
+{
+ "spec": "1",
+ "id": "recipe/shadow-reserve-all-holds-nothing-for-a-shadowed-entry",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "closed"
+  },
+  "user": {
+   "scope": "user",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 1
+   },
+   "on_store_error": "closed",
+   "shadow": true
+  }
+ },
+ "timeline": [
+  {
+   "op": "check",
+   "at_ms": 1700000000000,
+   "limiter": "user",
+   "id": "u",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "reserve_all",
+   "handle": "r",
+   "entries": [
+    {
+     "limiter": "user",
+     "id": "u"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "u"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 0,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 1,
+       "reset_ms": 30000,
+       "retry_after_ms": null
+      }
+     ],
+     "refunded": [
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "cancel",
+   "handle": "r",
+   "expect": {
+    "calls": [
+     {
+      "op": "refund",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "refunded": [
+      null,
+      true
+     ]
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 1,
+     "reset_ms": 30000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "reserve_all",
+   "handle": "s",
+   "entries": [
+    {
+     "limiter": "user",
+     "id": "v"
+    },
+    {
+     "limiter": "user",
+     "id": "v"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "v"
+     },
+     {
+      "op": "hit",
+      "limiter": "user",
+      "id": "v"
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "refund",
+      "limiter": "user",
+      "id": "v"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 2,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "limited",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000,
+       "shadowed": true
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 30000
+      }
+     ],
+     "refunded": [
+      true,
+      null,
+      null
+     ]
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "user",
+   "id": "v",
+   "expect": {
+    "state": {
+     "level": 0,
+     "ts": 1700000000000
+    }
+   }
+  },
+  {
+   "op": "inspect",
+   "limiter": "ip",
+   "id": "a",
+   "expect": {
+    "state": {
+     "level": 120000,
+     "ts": 1700000000000
+    }
+   }
+  }
+ ]
+}

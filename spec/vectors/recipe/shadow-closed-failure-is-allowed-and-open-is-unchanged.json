@@ -1,0 +1,294 @@
+{
+ "spec": "1",
+ "id": "recipe/shadow-closed-failure-is-allowed-and-open-is-unchanged",
+ "kind": "recipe",
+ "tiers": [
+  "exact",
+  "local"
+ ],
+ "salt": "s",
+ "limiters": {
+  "closed": {
+   "scope": "closed",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "closed",
+   "shadow": true
+  },
+  "open": {
+   "scope": "open",
+   "policy": {
+    "limit": 2,
+    "window_ms": 60000,
+    "burst": 2
+   },
+   "on_store_error": "open",
+   "shadow": true
+  },
+  "ip": {
+   "scope": "ip",
+   "policy": {
+    "limit": 1,
+    "window_ms": 60000,
+    "burst": 1
+   },
+   "on_store_error": "closed"
+  }
+ },
+ "timeline": [
+  {
+   "op": "fault",
+   "limiter": "closed",
+   "fault": "error",
+   "on": [
+    "peek",
+    "hit"
+   ]
+  },
+  {
+   "op": "fault",
+   "limiter": "open",
+   "fault": "timeout",
+   "on": [
+    "peek",
+    "hit"
+   ]
+  },
+  {
+   "op": "check_all",
+   "at_ms": 1700000000000,
+   "entries": [
+    {
+     "limiter": "closed",
+     "id": "x"
+    },
+    {
+     "limiter": "open",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     },
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "open",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "hit",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "governing": 2,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000,
+       "shadowed": true
+      },
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": null
+      },
+      {
+       "allowed": true,
+       "reason": "ok",
+       "status": null,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check_all",
+   "entries": [
+    {
+     "limiter": "closed",
+     "id": "x"
+    },
+    {
+     "limiter": "ip",
+     "id": "a"
+    }
+   ],
+   "expect": {
+    "calls": [
+     {
+      "op": "peek",
+      "limiter": "closed",
+      "id": "x",
+      "failed": true
+     },
+     {
+      "op": "peek",
+      "limiter": "ip",
+      "id": "a"
+     }
+    ],
+    "result": {
+     "allowed": false,
+     "governing": 1,
+     "decisions": [
+      {
+       "allowed": true,
+       "reason": "store_error",
+       "status": null,
+       "remaining": null,
+       "reset_ms": null,
+       "retry_after_ms": 1000,
+       "shadowed": true
+      },
+      {
+       "allowed": false,
+       "reason": "limited",
+       "status": 429,
+       "remaining": 0,
+       "reset_ms": 60000,
+       "retry_after_ms": 60000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "closed",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "x",
+      "failed": true
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "store_error",
+     "status": null,
+     "remaining": null,
+     "reset_ms": null,
+     "retry_after_ms": 1000,
+     "shadowed": true
+    }
+   }
+  },
+  {
+   "op": "heal",
+   "limiter": "closed"
+  },
+  {
+   "op": "check",
+   "limiter": "closed",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 1,
+     "reset_ms": 30000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "closed",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "ok",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": null
+    }
+   }
+  },
+  {
+   "op": "check",
+   "limiter": "closed",
+   "id": "x",
+   "expect": {
+    "calls": [
+     {
+      "op": "hit",
+      "limiter": "closed",
+      "id": "x"
+     }
+    ],
+    "result": {
+     "allowed": true,
+     "reason": "limited",
+     "status": null,
+     "remaining": 0,
+     "reset_ms": 60000,
+     "retry_after_ms": 30000,
+     "shadowed": true
+    }
+   }
+  }
+ ]
+}

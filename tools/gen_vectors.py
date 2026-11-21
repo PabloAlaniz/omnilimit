@@ -183,12 +183,15 @@ def headers(scope: str, limit: int, window_ms: int, r: dict) -> dict:
     return {"draft-11": draft, "legacy": legacy}
 
 
-def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list[tuple], scope: str = "t") -> dict:
+def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list[tuple], scope: str = "t", shadow: bool = False) -> dict:
     """`moves` are `(at_ms, id)` hits, or `(at_ms, id, op)` with op `hit`, `peek` or `reset`, or
     `(at_ms, id, op, cost)` for a hit or peek that weighs more than one unit, or
     `(at_ms, id, "refund", of)` giving back the hit at step `of`. `of` may be a function that
     picks one from `(fresh, spent)`, the allowed hit steps of that id not refunded yet and
-    already refunded, or returns `None` to drop the move."""
+    already refunded, or returns `None` to drop the move.
+
+    With `shadow`, the limiter runs in shadow mode: the store sees the same calls, a denial is
+    reported as allowed and `shadowed`, and no decision has headers."""
     meters: dict[str, Meter] = {}
     histories: dict[str, list[dict]] = {}
     steps = []
@@ -248,24 +251,27 @@ def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list
         tag = {"op": op} if op != "hit" else {}
         if cost != 1:
             tag["cost"] = cost
+        shadowed = shadow and not r["allowed"]
         steps.append(
             {
                 "at_ms": at,
                 "id": who,
                 **tag,
                 "expect": {
-                    "allowed": r["allowed"],
+                    "allowed": r["allowed"] or shadowed,
                     "reason": "ok" if r["allowed"] else "limited",
-                    "status": None if r["allowed"] else 429,
+                    "status": None if r["allowed"] or shadowed else 429,
                     "remaining": r["remaining"],
                     "reset_ms": r["reset_ms"],
                     "retry_after_ms": r["retry_after_ms"],
+                    # Written only when true, so earlier vectors keep their bytes.
+                    **({"shadowed": True} if shadowed else {}),
                     "state": r["state"],
-                    "headers": headers(scope, limit, window_ms, r),
+                    "headers": {"draft-11": {}, "legacy": {}} if shadow else headers(scope, limit, window_ms, r),
                 },
             }
         )
-    return {
+    vector = {
         "spec": SPEC,
         "id": vector_id,
         "kind": "sequence",
@@ -273,8 +279,11 @@ def sequence(vector_id: str, limit: int, window_ms: int, burst: int, moves: list
         "policy": {"limit": limit, "window_ms": window_ms, "burst": burst},
         "scope": scope,
         "salt": "s",
-        "steps": steps,
     }
+    if shadow:
+        vector["shadow"] = True
+    vector["steps"] = steps
+    return vector
 
 
 def sequences() -> dict[str, dict]:
@@ -426,6 +435,34 @@ def sequences() -> dict[str, dict]:
                 cost = min(burst, rng.choice([1, 1, 2, 3, burst, max(1, burst // 2)]))
                 moves.append((at, who, op, cost))
         out[f"sequence/refund-random-{n:03d}"] = sequence(f"sequence/refund-random-{n:03d}", limit, window, burst, moves)
+
+    # Shadow mode: the same moves as an enforcing limiter, the same states, and no denial.
+    shadowed_moves = {
+        "login-burst-2": named["login-burst-2"],
+        "denied-does-not-extend-the-wait": named["denied-does-not-extend-the-wait"],
+        "peek-after-denial-reports-the-same-wait": with_ops["peek-after-denial-reports-the-same-wait"],
+        "count-failures-only": with_ops["count-failures-only"],
+        "cost-denied-reports-the-wait-for-the-whole-cost": with_cost["cost-denied-reports-the-wait-for-the-whole-cost"],
+        "refund-after-other-hits-is-not-more-generous": with_refund["refund-after-other-hits-is-not-more-generous"],
+    }
+    for k, v in shadowed_moves.items():
+        out[f"sequence/shadow-{k}"] = sequence(f"sequence/shadow-{k}", *v, shadow=True)
+    rng = random.Random(20261121)
+    for n in range(8):
+        limit = rng.choice([1, 2, 3, 5, 10])
+        window = rng.choice([1000, 1009, 10_000, 60_000])
+        burst = rng.choice([1, 2, 3, limit, limit + 1])
+        at = BASE + rng.randrange(1000)
+        moves = []
+        for _ in range(rng.randrange(12, 40)):
+            at += rng.choice([0, 0, 0, 1, 17, 333, 1000, window // limit])
+            op = rng.choice([h, h, h, h, p, r, f])
+            who = rng.choice("aab")
+            if op == f:
+                moves.append((at, who, f, pick))
+            else:
+                moves.append((at, who, op, min(burst, rng.choice([1, 1, 1, 2, burst]))))
+        out[f"sequence/shadow-random-{n:03d}"] = sequence(f"sequence/shadow-random-{n:03d}", limit, window, burst, moves, shadow=True)
     return out
 
 
@@ -564,6 +601,22 @@ def failures() -> dict[str, dict]:
                 "kind": "failure",
                 "fault": fault,
                 "on_store_error": mode,
+                "policy": {"limit": 5, "window_ms": 60_000, "burst": 5},
+                "expect": expect,
+            }
+    # In shadow mode a closed failure lets the request through, marked, with no headers. An open
+    # one is unchanged: it was not going to deny.
+    shadow_expect = {"open": open_expect, "closed": {**closed_expect, "allowed": True, "status": None, "shadowed": True, "headers": {}}}
+    for fault in ["error", "timeout", "missing_binding"]:
+        for mode, expect in shadow_expect.items():
+            vid = f"failure/{fault}-{mode}-shadow"
+            out[vid] = {
+                "spec": SPEC,
+                "id": vid,
+                "kind": "failure",
+                "fault": fault,
+                "on_store_error": mode,
+                "shadow": True,
                 "policy": {"limit": 5, "window_ms": 60_000, "burst": 5},
                 "expect": expect,
             }
@@ -789,11 +842,17 @@ class RecipeModel:
             return m.refund(self.now, since, cost)
         return m.hit(self.now, cost) if op == "hit" else m.peek(self.now, cost)
 
+    def shadowed(self, name: str, decision: dict) -> dict:
+        """What a limiter reports: in shadow mode, a denial becomes an allowed, marked decision."""
+        if decision["allowed"] or not self.limiters[name].get("shadow"):
+            return decision
+        return {**decision, "allowed": True, "status": None, "shadowed": True}
+
     def decide(self, op: str, name: str, who: str, cost: int = 1) -> dict:
         r = self.store(op, name, who, cost)
         if r is None:
-            return dict(OPEN_FAILURE if self.limiters[name]["on_store_error"] == "open" else CLOSED_FAILURE)
-        return short(r)
+            return self.shadowed(name, dict(OPEN_FAILURE if self.limiters[name]["on_store_error"] == "open" else CLOSED_FAILURE))
+        return self.shadowed(name, short(r))
 
     def validate(self, entries: list[dict], peeks: bool, reserves: bool = False) -> None:
         if not entries:
@@ -877,10 +936,11 @@ class RecipeModel:
                 r = self.store("hit", e["limiter"], e["id"], cost(e))
                 if r is None:
                     on = self.limiters[e["limiter"]]["on_store_error"]
-                    decisions.append(dict(OPEN_FAILURE if on == "open" else CLOSED_FAILURE))
+                    decisions.append(self.shadowed(e["limiter"], dict(OPEN_FAILURE if on == "open" else CLOSED_FAILURE)))
                     held.append(None)
                 else:
-                    decisions.append(short(r))
+                    decisions.append(self.shadowed(e["limiter"], short(r)))
+                    # A shadowed denial wrote nothing, so it holds nothing.
                     held.append({"limiter": e["limiter"], "id": e["id"], "cost": cost(e), "since": r["state"]["ts"]} if r["allowed"] else None)
                 if not decisions[-1]["allowed"]:
                     break
@@ -1074,10 +1134,12 @@ def recipe(vector_id: str, limiters: dict, timeline: list[dict], lockouts: dict 
     return vector
 
 
-def lim(scope: str, limit: int, window_ms: int, burst: int | None = None, on: str = "closed", tier: str | None = None) -> dict:
+def lim(scope: str, limit: int, window_ms: int, burst: int | None = None, on: str = "closed", tier: str | None = None, shadow: bool = False) -> dict:
     out = {"scope": scope, "policy": {"limit": limit, "window_ms": window_ms, "burst": burst or limit}, "on_store_error": on}
     if tier:
         out["tier"] = tier
+    if shadow:
+        out["shadow"] = True
     return out
 
 
@@ -1502,6 +1564,71 @@ def recipes() -> dict[str, dict]:
                 att("u", True, "old-form"), att("u", True, "new-form"),
             ],
             {"old-form": [{"limiter": "old"}], "new-form": {"limits": [{"limiter": "new"}], "mode": "advisory"}},
+        ),
+    })
+    # Shadow mode: a shadowed decision is allowed, so recipes go on past it and enforce the rest.
+    watched = {"ip": lim("ip", 2, 60_000), "user": lim("user", 1, 60_000, shadow=True)}
+    named.update({
+        "shadow-check-all-enforces-only-the-enforcing-limits": (
+            watched,
+            [
+                ca(("ip", "a"), ("user", "u"), at=b),
+                ca(("user", "u"), ("ip", "a")),
+                ca(("ip", "a"), ("user", "u")),
+                one("inspect", "ip", "a"), one("inspect", "user", "u"),
+            ],
+        ),
+        "shadow-peek-all-commits-past-a-shadowed-peek": (
+            watched,
+            [
+                one("check", "user", "u", at=b),
+                pa("p", ("user", "u"), ("ip", "a")),
+                settle("commit", "p"),
+                one("peek", "user", "u"),
+                one("inspect", "user", "u"), one("inspect", "ip", "a"),
+            ],
+        ),
+        "shadow-reserve-all-holds-nothing-for-a-shadowed-entry": (
+            watched,
+            [
+                one("check", "user", "u", at=b),
+                ra("r", ("user", "u"), ("ip", "a")),
+                settle("cancel", "r"),
+                one("check", "ip", "a"), one("check", "ip", "a"),
+                ra("s", ("user", "v"), ("user", "v"), ("ip", "a")),
+                one("inspect", "user", "v"), one("inspect", "ip", "a"),
+            ],
+        ),
+        "shadow-closed-failure-is-allowed-and-open-is-unchanged": (
+            {"closed": lim("closed", 2, 60_000, shadow=True), "open": lim("open", 2, 60_000, on="open", shadow=True), "ip": lim("ip", 1, 60_000)},
+            [
+                fault("closed", "error", ["peek", "hit"]),
+                fault("open", "timeout", ["peek", "hit"]),
+                ca(("closed", "x"), ("open", "x"), ("ip", "a"), at=b),
+                ca(("closed", "x"), ("ip", "a")),
+                one("check", "closed", "x"),
+                heal("closed"),
+                one("check", "closed", "x"), one("check", "closed", "x"), one("check", "closed", "x"),
+            ],
+        ),
+        "shadow-lockout-runs-every-verification": (
+            {"subject": lim("subject", 2, 60_000, shadow=True), "ip": lim("ip", 5, 60_000, shadow=True)},
+            [
+                att(["u", "a"], False, at=b), att(["u", "a"], False), att(["u", "a"], False), att(["u", "a"], False),
+                one("inspect", "subject", "u"),
+                att(["u", "a"], True),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"),
+            ],
+            {"login": {"limits": [{"limiter": "subject"}, {"limiter": "ip", "reset_on_success": False}]}},
+        ),
+        "shadow-lockout-reserve-mixed-with-an-enforcing-limit": (
+            {"subject": lim("subject", 1, 60_000, shadow=True), "ip": lim("ip", 3, 60_000)},
+            [
+                att(["u", "a"], False, at=b), att(["u", "a"], False), att(["u", "a"], False), att(["u", "a"], False),
+                gate("g", ["u", "b"]), settle("succeed", "g"),
+                one("inspect", "subject", "u"), one("inspect", "ip", "a"), one("inspect", "ip", "b"),
+            ],
+            {"login": {"limits": [{"limiter": "subject"}, {"limiter": "ip", "reset_on_success": False}], "mode": "reserve"}},
         ),
     })
     out = {f"recipe/{k}": recipe(f"recipe/{k}", *v) for k, v in named.items()}
