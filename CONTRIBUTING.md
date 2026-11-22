@@ -49,3 +49,9 @@ If you fix a bug the suite missed, add a vector, and a mutant to `tools/run_muta
 ## Pull requests
 
 PRs are squash-merged, so titles must be [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`...). The title drives the changelog and the version. Coverage has a 95% floor.
+
+## Releases
+
+release-please opens a release pull request after each change to `main`. Merging it publishes to npm and PyPI.
+
+Give the release workflow a token of the maintainer as the `RELEASE_PLEASE_TOKEN` secret: a fine-grained personal access token for this repository only, with Contents and Pull requests set to read and write. The release pull request is then opened as the maintainer, its checks run on their own, and it merges like any other. Without the secret it is opened by the workflow token, GitHub holds its `pull_request` checks until someone approves them in the pull request, and `main` refuses the merge until they pass.
