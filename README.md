@@ -222,8 +222,6 @@ Beyond the fixed vectors, every run draws new ones from the model, drives both p
 
 Releases are built in CI and published with provenance, with no runtime dependencies. [Quality and security practices](docs/quality.md) lists each practice with its evidence and how to verify a release, and the [threat model](docs/threat-model.md) says what the library defends against.
 
-Releases are built in CI and published with provenance, with no runtime dependencies. [Quality and security practices](docs/quality.md) lists each practice with its evidence and how to verify a release, and the [threat model](docs/threat-model.md) says what the library defends against.
-
 Other libraries may suit you better: see [how it compares](docs/compare.md) and the [roadmap](docs/roadmap.md).
 
 ## License
