@@ -21,6 +21,8 @@ CI runs these on every pull request, and the `ci-ok` check requires all of them.
 
 TypeScript and Python also take turns on one counter in real Redis and Postgres, using sequence vectors. That proves they derive the same key and read each other's state.
 
+The last published release and the current code take turns the same way, in either order, which is what a rolling deploy does: see [stability](stability.md).
+
 An empty cell means that kind does not exercise the store. For example, `failure` runs against simulated store faults at the limiter level.
 
 ## Beyond the vectors

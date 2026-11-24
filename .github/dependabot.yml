@@ -19,6 +19,9 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+        # The last release, installed under another name to test against it: on its own, so
+        # that moving it to a new release is one visible change.
+        exclude-patterns: ["omnilimit-released"]
 
   - package-ecosystem: uv
     directory: /python

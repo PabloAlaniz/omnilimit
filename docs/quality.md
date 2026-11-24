@@ -66,7 +66,7 @@ Vulnerabilities in omnilimit itself follow the [security policy](https://github.
 ### Releases and support
 
 - Each package has its own version, tag and changelog: `ts-v0.5.0`, `py-v0.5.0`.
-- Only the latest release of each package is supported. Before 1.0 there are no maintenance branches, and a minor version may break compatibility; the changelog says when.
+- Only the latest release of each package is supported. Before 1.0 there are no maintenance branches, and a minor version may break compatibility; the changelog says when. [Stability](stability.md) says what does not change between releases.
 - Each GitHub release carries a CycloneDX bill of materials for its package.
 
 ### Verifying a release
