@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { Redis as IORedis } from 'ioredis';
+import { Cluster as IORedisCluster, Redis as IORedis } from 'ioredis';
 import pg from 'pg';
-import { createClient } from 'redis';
+import { createClient, createCluster } from 'redis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   REDIS_HIT_LUA,
@@ -15,15 +15,18 @@ import { createLimiter } from '../../src/core/limiter.js';
 import { fromRowQuery, MIGRATION_SQL, postgresStore } from '../../src/stores/postgres.js';
 import { fromIoredis, fromNodeRedis, redisStore } from '../../src/stores/redis.js';
 import type { Store } from '../../src/core/types.js';
+import { fuzzOf } from '../support/fuzz.js';
 import { runConcurrency, runRecipe, runSequence, vectorsOf, type Vector } from '../support/vectors.js';
 
-const sequences = vectorsOf('sequence').filter((v) => v.tiers.includes('exact'));
+// With OMNILIMIT_FUZZ_VECTORS, the vectors drawn for this run go to the real stores too.
+const sequences = [...vectorsOf('sequence'), ...fuzzOf('sequence')].filter((v) => v.tiers.includes('exact'));
 const concurrency = vectorsOf('concurrency');
-const recipes = vectorsOf('recipe').filter((v) => v.tiers.includes('exact'));
+const recipes = [...vectorsOf('recipe'), ...fuzzOf('recipe')].filter((v) => v.tiers.includes('exact'));
 const redisUrls = (process.env['OMNILIMIT_TEST_REDIS_URLS'] ?? '').split(',').filter(Boolean);
 const postgresUrls = (process.env['OMNILIMIT_TEST_POSTGRES_URLS'] ?? '').split(',').filter(Boolean);
+const clusterUrls = (process.env['OMNILIMIT_TEST_REDIS_CLUSTER_URLS'] ?? '').split(',').filter(Boolean);
 
-if (process.env['OMNILIMIT_REQUIRE_STORES'] && (!redisUrls.length || !postgresUrls.length)) {
+if (process.env['OMNILIMIT_REQUIRE_STORES'] && (!redisUrls.length || !postgresUrls.length || !clusterUrls.length)) {
   throw new Error('OMNILIMIT_REQUIRE_STORES is set, but store URLs are missing: CI would pass without testing anything');
 }
 
@@ -233,6 +236,33 @@ for (const url of postgresUrls) {
     });
 
     suite('pg through fromRowQuery', () => rowsOnly);
+  });
+}
+
+// Redis Cluster: every script takes one key, so a call never spans slots. One node holding all
+// slots is enough to prove it: a cluster refuses a script that touches a key it did not declare.
+for (const url of clusterUrls) {
+  describe(`redis cluster ${url}`, () => {
+    const { hostname: host, port } = new URL(url);
+    const io = new IORedisCluster([{ host, port: Number(port) }], { lazyConnect: true });
+    const node = createCluster({ rootNodes: [{ url }] });
+    let ioStore: Store;
+    let nodeStore: Store;
+
+    beforeAll(async () => {
+      await io.connect();
+      await node.connect();
+      ioStore = redisStore(fromIoredis(io));
+      nodeStore = redisStore(fromNodeRedis(node));
+    });
+
+    afterAll(async () => {
+      io.disconnect();
+      await node.close();
+    });
+
+    suite('ioredis', () => ioStore);
+    suite('node-redis', () => nodeStore);
   });
 }
 

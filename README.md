@@ -187,13 +187,13 @@ A request that would be limited, or refused by `onStoreError: 'closed'`, comes b
 ```ts
 import Redis from 'ioredis';
 import { fromIoredis, redisStore } from 'omnilimit/redis';
-const store = redisStore(fromIoredis(new Redis(process.env.REDIS_URL)));
+const store = redisStore(fromIoredis(new Redis(process.env.REDIS_URL, { autoResendUnfulfilledCommands: false })));
 
 import { MIGRATION_SQL, postgresStore } from 'omnilimit/postgres';
 const store = postgresStore(pool); // apply MIGRATION_SQL once; schedule store.cleanup()
 ```
 
-See [stores](docs/stores.md) for details, including Workers configuration.
+See [stores](docs/stores.md) for details, including Workers configuration, Redis Cluster, and why ioredis needs that option.
 
 ## Only need the client IP?
 
@@ -216,7 +216,9 @@ It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) befor
 
 ## How it is verified
 
-Vectors come from a separate generator that shares no code with any port, so no port validates itself. CI runs them on Node 20, 22 and 24, Python 3.11 to 3.14, in real `workerd`, and against real Redis, Valkey and Postgres, where TypeScript and Python also share one counter. It also injects realistic bugs and fails if the suite does not catch them. See the [conformance matrix](docs/matrix.md).
+Vectors come from a separate generator that shares no code with any port, so no port validates itself. CI runs them on Node 20, 22 and 24, Python 3.11 to 3.14, in real `workerd`, and against real Redis, Valkey and Postgres, where TypeScript and Python also share one counter. It also injects realistic bugs and fails if the suite does not catch them.
+
+Beyond the fixed vectors, every run draws new ones from the model, drives both ports through every interleaving of the recipes in small scopes, cuts connections between real clients and real stores, and counts the calls each operation makes. See the [conformance matrix](docs/matrix.md) and the [benchmarks](docs/benchmarks.md).
 
 Releases are built in CI and published with provenance, with no runtime dependencies. [Quality and security practices](docs/quality.md) lists each practice with its evidence and how to verify a release, and the [threat model](docs/threat-model.md) says what the library defends against.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -58,6 +59,32 @@ ALL_VECTORS = _load()
 
 def vectors_of(kind: str) -> list[dict[str, Any]]:
     return [vector for vector in ALL_VECTORS if vector["kind"] == kind]
+
+
+def _load_fuzz() -> tuple[str | None, list[dict[str, Any]]]:
+    """Vectors drawn for this run by `tools/fuzz_vectors.py`, when OMNILIMIT_FUZZ_VECTORS names
+    their directory. They have the shape of the committed ones and go through the same runners."""
+    name = os.environ.get("OMNILIMIT_FUZZ_VECTORS")
+    if not name:
+        return None, []
+    base = Path(name).resolve()
+    if not base.is_dir():
+        raise RuntimeError(
+            f"OMNILIMIT_FUZZ_VECTORS: {base} does not exist; run tools/fuzz_vectors.py"
+        )
+    seed = (base / "SEED").read_text(encoding="utf-8").strip()
+    return seed, [json.loads(p.read_text(encoding="utf-8")) for p in sorted(base.rglob("*.json"))]
+
+
+FUZZ_SEED, FUZZ_VECTORS = _load_fuzz()
+
+
+def fuzz_of(kind: str, subject: str | None = None) -> list[dict[str, Any]]:
+    return [
+        vector
+        for vector in FUZZ_VECTORS
+        if vector["kind"] == kind and (subject is None or vector.get("subject") == subject)
+    ]
 
 
 def policy_of(vector: dict[str, Any]) -> dict[str, int]:

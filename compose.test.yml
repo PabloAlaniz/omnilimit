@@ -14,3 +14,14 @@ services:
     image: postgres:17-alpine
     environment: { POSTGRES_PASSWORD: omnilimit, POSTGRES_DB: omnilimit }
     ports: ["127.0.0.1:55417:5432"]
+  # One node that holds every slot: see tools/redis_cluster.sh.
+  redis-cluster:
+    image: redis:7-alpine
+    environment: { PORT: "56381" }
+    volumes: ["./tools/redis_cluster.sh:/redis_cluster.sh:ro"]
+    command: sh /redis_cluster.sh
+    ports: ["127.0.0.1:56381:56381"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 56381 cluster info | grep -q cluster_state:ok"]
+      interval: 1s
+      retries: 30

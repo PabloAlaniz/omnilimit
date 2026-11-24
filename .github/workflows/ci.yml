@@ -93,6 +93,7 @@ jobs:
         options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       OMNILIMIT_REQUIRE_STORES: "1"
+      OMNILIMIT_TEST_REDIS_CLUSTER_URLS: redis://127.0.0.1:6381
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -100,6 +101,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "24", cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # A service container cannot run a script of the repository, so the cluster starts here.
+      - &redis_cluster
+        name: redis cluster (one node, every slot)
+        run: |
+          docker run -d --name redis-cluster -e PORT=6381 -p 127.0.0.1:6381:6381 \
+            -v "$PWD/tools/redis_cluster.sh:/redis_cluster.sh:ro" redis:7-alpine sh /redis_cluster.sh
+          timeout 60 sh -c 'until docker logs redis-cluster 2>&1 | grep -q "cluster ready"; do sleep 0.5; done'
       - run: pnpm test:stores
 
   workerd:
@@ -147,6 +155,76 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm mutants
 
+  # Both ports against the independent model on vectors nobody picked, and through every
+  # interleaving of the recipes in a few small scopes. A pull request uses one fixed seed, so a
+  # failure is the pull request's; the weekly run draws a new one and more vectors.
+  fuzz:
+    name: fuzz and interleavings (both ports, real stores)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services: *services
+    env:
+      OMNILIMIT_REQUIRE_STORES: "1"
+      OMNILIMIT_TEST_REDIS_CLUSTER_URLS: redis://127.0.0.1:6381
+      OMNILIMIT_FUZZ_VECTORS: ${{ github.workspace }}/.fuzz
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@9bbca1e9dc2902adb87e8780fe5c98796985a62d # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24", cache: pnpm }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x", enable-cache: true, python-version: "3.13" }
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --locked
+        working-directory: python
+      - *redis_cluster
+      - name: draw the vectors
+        env:
+          SCHEDULED: ${{ github.event_name == 'schedule' }}
+        run: |
+          if [ "$SCHEDULED" = "true" ]; then
+            python3 tools/fuzz_vectors.py --count 600
+          else
+            python3 tools/fuzz_vectors.py --seed 20261124 --count 150
+          fi
+      - name: typescript, memory and real stores
+        run: pnpm --filter omnilimit exec vitest run test/core/fuzz.test.ts test/stores/conformance.test.ts
+      - name: python, memory and real stores
+        run: uv run pytest -q tests/test_fuzz.py tests/test_stores.py -k "fuzz or interleaving or sequence or recipe"
+        working-directory: python
+
+  # What a check costs with each store. The times are reported in the job summary; the job fails
+  # on the calls each operation makes to the store, which are exact, and on a loose ceiling.
+  bench:
+    name: benchmarks (calls per operation, cost of a check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services: *services
+    env:
+      OMNILIMIT_REQUIRE_STORES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@9bbca1e9dc2902adb87e8780fe5c98796985a62d # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24", cache: pnpm }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x", enable-cache: true, python-version: "3.13" }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: uv sync --locked
+        working-directory: python
+      - run: node tools/bench.mjs --check --json bench-ts.json
+      - run: uv run python ../tools/bench.py --check --json ../bench-python.json
+        working-directory: python
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmarks
+          path: bench-*.json
+          if-no-files-found: ignore
+
   python-core:
     name: python core (${{ matrix.python }})
     runs-on: ubuntu-latest
@@ -175,6 +253,7 @@ jobs:
     services: *services
     env:
       OMNILIMIT_REQUIRE_STORES: "1"
+      OMNILIMIT_TEST_REDIS_CLUSTER_URLS: redis://127.0.0.1:6381
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -187,6 +266,7 @@ jobs:
       - run: pnpm build
       - run: uv sync --locked
         working-directory: python
+      - *redis_cluster
       # The whole suite, so coverage includes the stores.
       - run: uv run coverage run -m pytest
         working-directory: python
@@ -223,7 +303,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [spec, pinned, core, stores, workerd, package, mutants, python-core, python-stores, python-package, python-mutants]
+    needs: [spec, pinned, core, stores, workerd, package, mutants, fuzz, bench, python-core, python-stores, python-package, python-mutants]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

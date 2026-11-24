@@ -21,6 +21,7 @@ import valkey
 import valkey.asyncio
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from support import (
+    fuzz_of,
     run_concurrency,
     run_concurrency_async,
     run_recipe,
@@ -43,12 +44,17 @@ from omnilimit.stores.redis import AsyncRedisStore, RedisStore
 REDIS_URLS = [u for u in os.environ.get("OMNILIMIT_TEST_REDIS_URLS", "").split(",") if u]
 POSTGRES_URLS = [u for u in os.environ.get("OMNILIMIT_TEST_POSTGRES_URLS", "").split(",") if u]
 
-if os.environ.get("OMNILIMIT_REQUIRE_STORES") and not (REDIS_URLS and POSTGRES_URLS):
+CLUSTER_URLS = [u for u in os.environ.get("OMNILIMIT_TEST_REDIS_CLUSTER_URLS", "").split(",") if u]
+
+if os.environ.get("OMNILIMIT_REQUIRE_STORES") and not (
+    REDIS_URLS and POSTGRES_URLS and CLUSTER_URLS
+):
     raise RuntimeError("OMNILIMIT_REQUIRE_STORES is set, but store URLs are missing")
 
-SEQUENCES = [v for v in vectors_of("sequence") if "exact" in v["tiers"]]
+# With OMNILIMIT_FUZZ_VECTORS, the vectors drawn for this run go to the real stores too.
+SEQUENCES = [v for v in [*vectors_of("sequence"), *fuzz_of("sequence")] if "exact" in v["tiers"]]
 CONCURRENCY = vectors_of("concurrency")
-RECIPES = [v for v in vectors_of("recipe") if "exact" in v["tiers"]]
+RECIPES = [v for v in [*vectors_of("recipe"), *fuzz_of("recipe")] if "exact" in v["tiers"]]
 sequences = pytest.mark.parametrize("vector", SEQUENCES, ids=lambda v: v["id"])
 concurrency = pytest.mark.parametrize("vector", CONCURRENCY, ids=lambda v: v["id"])
 recipes = pytest.mark.parametrize("vector", RECIPES, ids=lambda v: v["id"])
@@ -115,6 +121,50 @@ def test_redis_concurrency(sync_redis: Any, vector: dict[str, Any]) -> None:
 @recipes
 def test_redis_recipe(sync_redis: Any, vector: dict[str, Any]) -> None:
     run_recipe(vector, RedisStore(sync_redis), suffix())
+
+
+# Redis Cluster: every script takes one key, so a call never spans slots. One node holding all
+# slots is enough to prove it: a cluster refuses a script that touches a key it did not declare.
+@pytest.fixture(params=CLUSTER_URLS)
+def sync_cluster(request: pytest.FixtureRequest) -> Iterator[Any]:
+    client = redis.RedisCluster.from_url(request.param, max_connections=64)
+    yield client
+    client.close()
+
+
+@sequences
+def test_redis_cluster_sequence(sync_cluster: Any, vector: dict[str, Any]) -> None:
+    run_sequence(vector, RedisStore(sync_cluster), suffix())
+
+
+@concurrency
+def test_redis_cluster_concurrency(sync_cluster: Any, vector: dict[str, Any]) -> None:
+    run_concurrency(vector, RedisStore(sync_cluster), suffix())
+
+
+@recipes
+def test_redis_cluster_recipe(sync_cluster: Any, vector: dict[str, Any]) -> None:
+    run_recipe(vector, RedisStore(sync_cluster), suffix())
+
+
+@pytest.mark.parametrize("url", CLUSTER_URLS)
+def test_async_redis_cluster(url: str) -> None:
+    async def run() -> None:
+        # A cluster client has no blocking pool: past its limit a call fails at once, so the
+        # limit has to cover the 200 simultaneous hits of the concurrency vector.
+        client = redis.asyncio.RedisCluster.from_url(url, max_connections=256)
+        try:
+            store = AsyncRedisStore(client)
+            for vector in SEQUENCES:
+                await run_sequence_async(vector, store, suffix())
+            for vector in CONCURRENCY:
+                await run_concurrency_async(vector, store, suffix())
+            for vector in RECIPES:
+                await run_recipe_async(vector, store, suffix())
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
 
 
 def test_redis_real_clock(sync_redis: Any) -> None:

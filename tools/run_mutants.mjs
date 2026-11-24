@@ -18,6 +18,7 @@ const core = [
   ['X-Forwarded-For read from the left', 'ts/src/ip/index.ts', 'return canonicalIp(entries[entries.length - 1 - hops]);', 'return canonicalIp(entries[0]);'],
   ['short chain falls back to first value', 'ts/src/ip/index.ts', 'if (entries.length <= hops) return null;', 'if (entries.length <= hops) return canonicalIp(entries[0]);'],
   ['IPv4-mapped not normalised', 'ts/src/ip/index.ts', 'if (isMapped) {', 'if (false) {'],
+  ['X-Forwarded-For trimmed of whatever the language calls whitespace', 'ts/src/ip/index.ts', "const entries = value.split(',').map(trimOws);", "const entries = value.split(',').map((entry) => entry.trim());"],
   ['store failure inverts open/closed', 'ts/src/core/limiter.ts', "const allowed = onStoreError === 'open';", "const allowed = onStoreError === 'closed';"],
   ['store timeout never fires', 'ts/src/core/limiter.ts', 'return await Promise.race([work, timeout]);', 'void timeout.catch(() => {}); return await Promise.race([work, new Promise<T>(() => {}), Promise.resolve().then(() => work)]);'],
   ['shorthand accepts plurals', 'ts/src/core/gcra.ts', '(second|minute|hour|day)$/;', '(second|minute|hour|day)s?$/;'],
@@ -135,7 +136,9 @@ let survived = 0;
 if (testsFail(['pnpm', 'exec', 'vitest', 'run', 'test/core'])) throw new Error('the unmutated suite must pass first');
 survived += run(core, ['pnpm', 'exec', 'vitest', 'run', 'test/core']);
 if (hasStores) {
-  survived += run(scripts, ['pnpm', 'exec', 'vitest', 'run', 'test/stores'], sync);
+  // The conformance suite only: the fault tests wait on timeouts, and a mutated script is not
+  // what they are about.
+  survived += run(scripts, ['pnpm', 'exec', 'vitest', 'run', 'test/stores/conformance.test.ts'], sync);
 } else {
   console.log('skipped script mutants: set OMNILIMIT_TEST_REDIS_URLS and OMNILIMIT_TEST_POSTGRES_URLS');
   if (process.env.CI) throw new Error('script mutants must run in CI');

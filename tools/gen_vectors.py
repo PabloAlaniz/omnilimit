@@ -509,7 +509,8 @@ def canonical(raw: str | None) -> str | None:
 def from_xff(value: str | None, hops: int) -> str | None:
     if value is None:
         return None
-    parts = [p.strip() for p in value.split(",")]
+    # Only the optional whitespace of HTTP, a space or a tab: `str.strip()` would take more.
+    parts = [p.strip(" \t") for p in value.split(",")]
     if len(parts) <= hops:
         return None
     return canonical(parts[len(parts) - 1 - hops])
@@ -562,11 +563,21 @@ def ips() -> dict[str, dict]:
     xff("ipv6-zone-is-null", "fe80::1%eth0", 0)
     xff("ipv6-unspecified", "::", 0)
     xff("ipv6-trailing-ipv4", "64:ff9b::192.0.2.33", 0)
+    # Around an entry, only a space and a tab are whitespace (RFC 9110, OWS). What a language
+    # happens to trim differs, and an address is never guessed from a value that is not one.
+    xff("spaces-and-tabs-are-trimmed", f"{spoof},\t {client} \t", 0)
+    xff("no-break-space-is-not-whitespace", f"{spoof}, {client}\u00a0", 0)
+    xff("vertical-tab-is-not-whitespace", f"{spoof},\u000b{client}", 0)
+    xff("form-feed-is-not-whitespace", f"{spoof}, {client}\u000c", 0)
+    xff("next-line-is-not-whitespace", f"{spoof}, {client}\u0085", 0)
+    xff("unit-separator-is-not-whitespace", f"{spoof}, \u001f{client}", 0)
 
     for name, headers_, peer, preset, expect in [
         ("cloudflare-reads-its-header", {"cf-connecting-ip": client, "x-forwarded-for": spoof}, "10.0.0.1", "cloudflare", client),
         ("cloudflare-without-header-is-null", {"x-forwarded-for": client}, "10.0.0.1", "cloudflare", None),
         ("cloudflare-with-list-is-null", {"cf-connecting-ip": f"{spoof}, {client}"}, "10.0.0.1", "cloudflare", None),
+        ("single-header-trims-spaces-and-tabs", {"cf-connecting-ip": f" \t{client}\t "}, "10.0.0.1", "cloudflare", client),
+        ("single-header-no-break-space-is-null", {"cf-connecting-ip": f"{client}\u00a0"}, "10.0.0.1", "cloudflare", None),
         ("cloud-run-takes-rightmost", {"x-forwarded-for": f"{spoof}, {client}"}, "169.254.1.1", "cloud-run", client),
         ("cloud-run-lb-skips-the-balancer", {"x-forwarded-for": f"{spoof}, {client}, {lb}"}, "169.254.1.1", "cloud-run-lb", client),
         ("vercel-reads-its-header", {"x-vercel-forwarded-for": client, "x-forwarded-for": spoof}, None, "vercel", client),

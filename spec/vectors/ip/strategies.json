@@ -275,6 +275,84 @@
    "expect": "64:ff9b::c000:221"
   },
   {
+   "name": "spaces-and-tabs-are-trimmed",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6,\t 203.0.113.7 \t"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "no-break-space-is-not-whitespace",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7 "
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "vertical-tab-is-not-whitespace",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6,\u000b203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "form-feed-is-not-whitespace",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7\f"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "next-line-is-not-whitespace",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "unit-separator-is-not-whitespace",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, \u001f203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
    "name": "cloudflare-reads-its-header",
    "headers": {
     "cf-connecting-ip": "203.0.113.7",
@@ -301,6 +379,28 @@
    "name": "cloudflare-with-list-is-null",
    "headers": {
     "cf-connecting-ip": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "preset": "cloudflare"
+   },
+   "expect": null
+  },
+  {
+   "name": "single-header-trims-spaces-and-tabs",
+   "headers": {
+    "cf-connecting-ip": " \t203.0.113.7\t "
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "preset": "cloudflare"
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "single-header-no-break-space-is-null",
+   "headers": {
+    "cf-connecting-ip": "203.0.113.7 "
    },
    "peer": "10.0.0.1",
    "strategy": {

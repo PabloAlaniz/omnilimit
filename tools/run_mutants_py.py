@@ -359,6 +359,12 @@ CORE = [
     ),
     ("zone identifiers accepted", "ip.py", 'if "%" in raw:', "if False:"),
     (
+        "X-Forwarded-For trimmed of whatever the language calls whitespace",
+        "ip.py",
+        'entries = [entry.strip(_OWS) for entry in value.split(",")]',
+        'entries = [entry.strip() for entry in value.split(",")]',
+    ),
+    (
         "only the first header line is read",
         "ip.py",
         "value = getlist(name) if callable(getlist) else headers.get(name)",

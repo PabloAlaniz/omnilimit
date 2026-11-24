@@ -151,6 +151,11 @@ ambiguity resolves to the reservation staying counted. Like a reset, a refund th
 out is reported as such and does not follow `open`/`closed`. A reservation belongs to the limiter
 that made it.
 
+"Never retries" has to hold all the way to the store. A refund is not idempotent: sent twice, it
+gives back twice. A store client that sends a command again by itself after losing a connection
+breaks the rule, and a port's documentation must say how to turn that off for each client that
+does it.
+
 Sequence vectors mark these steps with `op: "refund"` and `of`, the index of the earlier hit step
 being given back, which was allowed. The cost and `since` (its `state.ts`) come from that step.
 `expect` holds `refunded` and, when it is `true`, the `state` the store reported. A second refund
@@ -439,6 +444,8 @@ true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
 ## Client IP
 
 - `xff` with `hops`: split on commas, trim, take the entry `hops` positions from the right.
+- Trimming removes spaces and tabs only, the optional whitespace of RFC 9110, from an entry of
+  the chain and from a single-IP header. Any other character makes the value invalid.
   Anything to the left of what your own proxies appended is client controlled.
 - A chain with `hops` entries or fewer gives `null`. It never falls back to the first value.
 - An invalid value in the chosen position gives `null`.

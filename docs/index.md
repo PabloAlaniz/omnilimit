@@ -7,6 +7,7 @@ Rate limiting that behaves the same across stacks, and proves it.
 - [Stores](stores.md)
 - [Client IP](client-ip.md)
 - [Conformance matrix](matrix.md)
+- [Benchmarks](benchmarks.md)
 - [Quality and security practices](quality.md)
 - [Threat model](threat-model.md)
 - [How it compares](compare.md)

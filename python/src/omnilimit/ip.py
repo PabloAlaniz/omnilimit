@@ -108,10 +108,15 @@ def client_key(
     return None if ip is None else mask_ip(ip, ipv6_prefix)
 
 
+# The optional whitespace of HTTP (RFC 9110). `str.strip()` alone removes more, and not the
+# same characters as other languages do, so ports would disagree.
+_OWS = " \t"
+
+
 def _from_xff(value: str | None, hops: int) -> str | None:
     if value is None:
         return None
-    entries = [entry.strip() for entry in value.split(",")]
+    entries = [entry.strip(_OWS) for entry in value.split(",")]
     # The client controls everything to the left of what your proxies appended, so a chain
     # that is too short must never fall back to its first value.
     if len(entries) <= hops:
@@ -148,5 +153,5 @@ def resolve_client_ip(
         return _from_xff(_read_header(headers, "x-forwarded-for"), xff_hops)
     if header is not None:
         value = _read_header(headers, header.lower())
-        return canonical_ip(value.strip() if value is not None else None)
+        return canonical_ip(value.strip(_OWS) if value is not None else None)
     return canonical_ip(peer)

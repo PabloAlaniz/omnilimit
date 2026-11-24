@@ -14,11 +14,14 @@ Every change to behaviour goes through the same steps, and CI refuses a change t
 | Derive | An independent model, which shares no code with any port, generates the vectors | `tools/gen_vectors.py`, `spec/vectors/` |
 | Implement | Each port changes until every vector of its tier passes | `ts/`, `python/` |
 | Verify | Vectors run on every runtime and against real stores; both ports share one counter | [Conformance matrix](matrix.md) |
+| Search | New vectors are drawn from the model on every run, and every interleaving of the recipes is listed in small scopes, so the ports meet inputs nobody picked | `tools/fuzz_vectors.py`, `tools/explore_interleavings.py` |
+| Break | A proxy loses replies, requests and connections between real clients and real stores | `ts/test/stores/faults.test.ts`, `python/tests/test_faults.py` |
+| Measure | The calls each operation makes to the store are counted exactly, and a check is timed against a bare round trip | [Benchmarks](benchmarks.md) |
 | Check the checker | Realistic bugs are injected, and the build fails if the suite misses one | `tools/run_mutants.mjs`, `tools/run_mutants_py.py` |
 | Release | Versions and changelogs come from the commit history; packages are built and published by CI | `.github/workflows/release.yml` |
 | Audit | Scorecard, CodeQL and the whole suite run every week on `main`, changes or not | `.github/workflows/` |
 
-**When a bug escapes.** The fix comes with a vector that fails without it, and with a mutant when the bug can be written as one. The changelog records it as a `fix`. A bug that the vectors could not have expressed means the spec was silent, so the spec changes too.
+**When a bug escapes.** The fix comes with a vector that fails without it, and with a mutant when the bug can be written as one. A failure of the fuzz run is one too: its seed reproduces it, and the case becomes a named vector. The changelog records it as a `fix`. A bug that the vectors could not have expressed means the spec was silent, so the spec changes too.
 
 **When the spec changes meaning.** A vector never changes meaning within a spec version. That needs a new version, in `spec/VERSION`.
 
@@ -158,5 +161,5 @@ The npm package page shows the same provenance: the source commit and the workfl
 
 - **One maintainer.** No second reviewer, and one account to trust. See [governance](https://github.com/PabloAlaniz/omnilimit/blob/main/GOVERNANCE.md).
 - **No contributor sign-off.**
-- **Throughput is not measured.** See the [conformance matrix](matrix.md#not-verified).
+- **Benchmarks come from one machine.** They say what a check costs next to a round trip, not what your setup will do: see [benchmarks](benchmarks.md).
 - **No external audit.**
