@@ -23,11 +23,32 @@ Count the proxies you control between the internet and your app.
 | Cloud Run behind a Google load balancer | `{ preset: 'cloud-run-lb' }` | Same check, on the second value from the right |
 | Vercel | `{ preset: 'vercel' }` | The app only runs on Vercel |
 | N proxies of your own | `{ xff: { hops: N - 1 } }` | Each one appends to `X-Forwarded-For` |
+| N proxies that send `Forwarded` | `{ forwarded: { hops: N - 1 } }` | Each one appends an element to `Forwarded` |
 | Another edge with a single-IP header | `{ header: 'x-real-ip' }` | The edge overwrites it, and the origin cannot be reached directly |
 
 Presets describe the common setup, and a preset cannot detect a topology it does not match. Confirm yours by logging the headers from a known IP.
 
 **A Cloud Run URL ending in `.run.app` does not pass through Cloudflare,** even when your domain does. With `preset: 'cloudflare'`, that URL lets anyone forge the header. Restrict ingress if you use both.
+
+## The `Forwarded` header
+
+[RFC 7239](https://www.rfc-editor.org/rfc/rfc7239) is the standard form of `X-Forwarded-For`, and some proxies send only that. It is read with the same rule: count from the right, never guess.
+
+```ts
+resolveClientIp({ headers }, { forwarded: { hops: 1 } });
+// Forwarded: for=6.6.6.6, for="[2001:db8::7]:4711";proto=https, for=198.51.100.2
+// → 2001:db8::7
+```
+
+```python
+resolve_client_ip(headers, forwarded_hops=1)
+```
+
+Only the `for` parameter of the chosen element is used, without its port. `unknown` and obfuscated identifiers such as `_hidden` give `null`, and so does an element without exactly one `for`.
+
+Elements are split on every comma, even inside a quoted string. A client that opens a quote and never closes it must not be able to swallow the element your proxy appended, and no address contains a comma.
+
+Use the header your proxies append to, not both: a proxy that only appends to one leaves the other entirely to the client.
 
 ## When there is no IP
 

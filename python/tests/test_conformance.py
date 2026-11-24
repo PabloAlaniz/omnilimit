@@ -20,6 +20,7 @@ from support import (
     run_sequence,
     run_sequence_async,
     shadowed_field,
+    strategy_kwargs,
     vectors_of,
 )
 
@@ -109,11 +110,7 @@ class MultiLine:
 @pytest.mark.parametrize("case", _IP["cases"], ids=lambda c: c["name"])
 def test_ip_strategies(case: dict[str, Any]) -> None:
     strategy = case["strategy"]
-    kwargs: dict[str, Any] = (
-        {"preset": strategy["preset"]}
-        if "preset" in strategy
-        else {"xff_hops": strategy["xff"]["hops"]}
-    )
+    kwargs = strategy_kwargs(strategy)
     assert resolve_client_ip(case["headers"], case.get("peer"), **kwargs) == case["expect"]
     # A framework's headers object must behave the same as a plain mapping.
     wrapped = MultiLine(case["headers"])

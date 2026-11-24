@@ -23,7 +23,6 @@ Items that came up while the library was being adopted in applications, in rough
 | Serverless HTTP Postgres drivers in the matrix | `fromRowQuery` adapts them, but only `pg` is tested | One such driver in the store suite |
 | Flask and Django adapters | Python has FastAPI and plain ASGI only | A decorator for Flask, a middleware and a decorator for Django, on the blocking `Limiter` |
 | Server action helper for Next.js | A server action has no `Request` to pass to `checkRateLimit` | A helper that reads `headers()` and returns the decision |
-| `Forwarded` header | [RFC 7239](https://www.rfc-editor.org/rfc/rfc7239) is the standard form of `X-Forwarded-For`, and some proxies send only that | A client IP strategy that reads `for=` from the right, with the same hop count rule |
 | Problem Details responses | [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) gives denials a standard body | An opt-in `application/problem+json` body for 429, 503 and 400 in every adapter |
 | More client IP presets | Each platform documents its own trusted header | Presets added only with a published statement from the platform that the header cannot be forged |
 | A newer rate limit headers draft | `draft-11` is pinned to one revision of the IETF document | A new profile next to it, never a silent change of the existing one |

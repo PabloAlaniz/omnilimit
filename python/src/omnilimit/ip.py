@@ -93,6 +93,7 @@ def client_key(
     *,
     preset: IpPreset | None = None,
     xff_hops: int | None = None,
+    forwarded_hops: int | None = None,
     header: str | None = None,
     use_peer: bool = False,
     ipv6_prefix: int = 64,
@@ -103,7 +104,13 @@ def client_key(
     `client_key(request.headers, preset="cloudflare") or "shared"`.
     """
     ip = resolve_client_ip(
-        headers, peer, preset=preset, xff_hops=xff_hops, header=header, use_peer=use_peer
+        headers,
+        peer,
+        preset=preset,
+        xff_hops=xff_hops,
+        forwarded_hops=forwarded_hops,
+        header=header,
+        use_peer=use_peer,
     )
     return None if ip is None else mask_ip(ip, ipv6_prefix)
 
@@ -124,33 +131,101 @@ def _from_xff(value: str | None, hops: int) -> str | None:
     return canonical_ip(entries[len(entries) - 1 - hops])
 
 
+_PORT = re.compile(r"[0-9]{1,5}")
+
+
+def _forwarded_node(value: str) -> str | None:
+    """The address of a `for` value of RFC 7239: IPv4 or bracketed IPv6, with an optional port."""
+    node = value
+    if node.startswith('"'):
+        if len(node) < 2 or not node.endswith('"'):
+            return None
+        node = node[1:-1]
+        if '"' in node or "\\" in node:
+            return None
+    if node.startswith("["):
+        host, bracket, rest = node[1:].partition("]")
+        if not bracket or ":" not in host:
+            return None
+        if rest and not (rest.startswith(":") and _PORT.fullmatch(rest[1:])):
+            return None
+        return canonical_ip(host)
+    host, colon, port = node.partition(":")
+    if colon and _PORT.fullmatch(port) is None:
+        return None
+    return canonical_ip(host)
+
+
+def _from_forwarded(value: str | None, hops: int) -> str | None:
+    if value is None:
+        return None
+    # Every comma, even inside a quoted string: a quote the client opened must not be able to
+    # swallow the element your proxy appended. No address contains a comma or a semicolon.
+    elements = value.split(",")
+    if len(elements) <= hops:
+        return None
+    node: str | None = None
+    for raw in elements[len(elements) - 1 - hops].split(";"):
+        pair = raw.strip(_OWS)
+        if not pair:
+            continue
+        name, equals, text = pair.partition("=")
+        if not equals:
+            return None
+        if name.lower() != "for":
+            continue
+        if node is not None:
+            return None
+        node = text
+    return None if node is None else _forwarded_node(node)
+
+
+def _check_hops(hops: object) -> None:
+    if not isinstance(hops, int) or isinstance(hops, bool) or hops < 0:
+        raise ValueError("omnilimit: hops must be a non-negative integer")
+
+
 def resolve_client_ip(
     headers: Any,
     peer: str | None = None,
     *,
     preset: IpPreset | None = None,
     xff_hops: int | None = None,
+    forwarded_hops: int | None = None,
     header: str | None = None,
     use_peer: bool = False,
 ) -> str | None:
     """Resolve the client IP from the one source you name.
 
     Choose exactly one: `preset`, `xff_hops` (read `X-Forwarded-For` from the right, skipping
-    entries added by your own proxies), `header` (a single-IP header your edge overwrites) or
-    `use_peer` (the TCP peer). `headers` is any mapping with lowercase names, or the headers
+    entries added by your own proxies), `forwarded_hops` (the same for the standard `Forwarded`
+    header of RFC 7239), `header` (a single-IP header your edge overwrites) or `use_peer` (the
+    TCP peer). `headers` is any mapping with lowercase names, or the headers
     object of your framework.
     """
-    chosen = sum((preset is not None, xff_hops is not None, header is not None, use_peer))
+    chosen = sum(
+        (
+            preset is not None,
+            xff_hops is not None,
+            forwarded_hops is not None,
+            header is not None,
+            use_peer,
+        )
+    )
     if chosen != 1:
-        raise ValueError("omnilimit: choose exactly one of preset, xff_hops, header or use_peer")
+        raise ValueError(
+            "omnilimit: choose exactly one of preset, xff_hops, forwarded_hops, header or use_peer"
+        )
     if preset is not None:
         if preset not in _PRESETS:
             raise ValueError("omnilimit: unknown IP preset")
         header, xff_hops = _PRESETS[preset]
     if xff_hops is not None:
-        if not isinstance(xff_hops, int) or isinstance(xff_hops, bool) or xff_hops < 0:
-            raise ValueError("omnilimit: hops must be a non-negative integer")
+        _check_hops(xff_hops)
         return _from_xff(_read_header(headers, "x-forwarded-for"), xff_hops)
+    if forwarded_hops is not None:
+        _check_hops(forwarded_hops)
+        return _from_forwarded(_read_header(headers, "forwarded"), forwarded_hops)
     if header is not None:
         value = _read_header(headers, header.lower())
         return canonical_ip(value.strip(_OWS) if value is not None else None)

@@ -14,6 +14,8 @@ export type IpStrategy =
   | { preset: IpPreset }
   /** Read `X-Forwarded-For` from the right, skipping `hops` entries added by your own proxies. */
   | { xff: { hops: number } }
+  /** Read the standard `Forwarded` header (RFC 7239) from the right, with the same hop count rule. */
+  | { forwarded: { hops: number } }
   /** A single-IP header that your edge overwrites. Anyone reaching your origin directly can forge it. */
   | { header: string }
   /** The TCP peer address. */
@@ -175,6 +177,53 @@ function fromXff(value: string | null, hops: number): string | null {
   return canonicalIp(entries[entries.length - 1 - hops]);
 }
 
+const PORT = /^[0-9]{1,5}$/;
+
+/** The address of a `for` value of RFC 7239: IPv4 or bracketed IPv6, with an optional port. */
+function forwardedNode(value: string): string | null {
+  let node = value;
+  if (node.startsWith('"')) {
+    if (node.length < 2 || !node.endsWith('"')) return null;
+    node = node.slice(1, -1);
+    if (node.includes('"') || node.includes('\\')) return null;
+  }
+  if (node.startsWith('[')) {
+    const end = node.indexOf(']');
+    if (end === -1) return null;
+    const host = node.slice(1, end);
+    const rest = node.slice(end + 1);
+    if (!host.includes(':')) return null;
+    if (rest !== '' && !(rest.startsWith(':') && PORT.test(rest.slice(1)))) return null;
+    return canonicalIp(host);
+  }
+  const colon = node.indexOf(':');
+  if (colon === -1) return canonicalIp(node);
+  return PORT.test(node.slice(colon + 1)) ? canonicalIp(node.slice(0, colon)) : null;
+}
+
+function fromForwarded(value: string | null, hops: number): string | null {
+  if (value === null) return null;
+  // Every comma, even inside a quoted string: a quote the client opened must not be able to
+  // swallow the element your proxy appended. No address contains a comma or a semicolon.
+  const elements = value.split(',');
+  if (elements.length <= hops) return null;
+  let node: string | null = null;
+  for (const raw of (elements[elements.length - 1 - hops] as string).split(';')) {
+    const pair = trimOws(raw);
+    if (pair === '') continue;
+    const equals = pair.indexOf('=');
+    if (equals === -1) return null;
+    if (pair.slice(0, equals).toLowerCase() !== 'for') continue;
+    if (node !== null) return null;
+    node = pair.slice(equals + 1);
+  }
+  return node === null ? null : forwardedNode(node);
+}
+
+const assertHops = (hops: unknown): void => {
+  if (!Number.isSafeInteger(hops) || (hops as number) < 0) throw new RangeError('omnilimit: hops must be a non-negative integer');
+};
+
 /**
  * Resolve the client IP using only sources your deployment makes trustworthy. Returns
  * `null` rather than guessing when the configured source is missing or malformed.
@@ -183,9 +232,12 @@ export function resolveClientIp(input: IpInput, strategy: IpStrategy): string | 
   const resolved = 'preset' in strategy ? PRESETS[strategy.preset] : strategy;
   if (!resolved) throw new RangeError('omnilimit: unknown IP preset');
   if ('xff' in resolved) {
-    const { hops } = resolved.xff;
-    if (!Number.isSafeInteger(hops) || hops < 0) throw new RangeError('omnilimit: hops must be a non-negative integer');
-    return fromXff(readHeader(input.headers, 'x-forwarded-for'), hops);
+    assertHops(resolved.xff.hops);
+    return fromXff(readHeader(input.headers, 'x-forwarded-for'), resolved.xff.hops);
+  }
+  if ('forwarded' in resolved) {
+    assertHops(resolved.forwarded.hops);
+    return fromForwarded(readHeader(input.headers, 'forwarded'), resolved.forwarded.hops);
   }
   if ('header' in resolved) {
     const value = readHeader(input.headers, resolved.header.toLowerCase());

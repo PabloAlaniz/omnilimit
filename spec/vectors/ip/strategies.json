@@ -353,6 +353,485 @@
    "expect": null
   },
   {
+   "name": "forwarded-rightmost-with-zero-hops",
+   "headers": {
+    "forwarded": "for=6.6.6.6, for=203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-spoofed-left-elements-are-ignored",
+   "headers": {
+    "forwarded": "for=6.6.6.6, for=7.7.7.7, for=203.0.113.7;proto=https, for=198.51.100.2"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 1
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-chain-shorter-than-hops-is-null",
+   "headers": {
+    "forwarded": "for=203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 1
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-missing-header-is-null",
+   "headers": {},
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-empty-header-is-null",
+   "headers": {
+    "forwarded": ""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-other-parameters-around-it",
+   "headers": {
+    "forwarded": "by=10.0.0.9;for=203.0.113.7;host=example.com;proto=https"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-parameter-name-in-any-case",
+   "headers": {
+    "forwarded": "For=203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-spaces-around-pairs",
+   "headers": {
+    "forwarded": "for=6.6.6.6,  for=203.0.113.7 ; proto=https "
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-empty-pairs-are-skipped",
+   "headers": {
+    "forwarded": ";for=203.0.113.7;;"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-element-without-for-is-null",
+   "headers": {
+    "forwarded": "for=6.6.6.6, proto=https;by=10.0.0.9"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-two-for-in-one-element-is-null",
+   "headers": {
+    "forwarded": "for=203.0.113.7;for=6.6.6.6"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-pair-without-equals-is-null",
+   "headers": {
+    "forwarded": "for=203.0.113.7;secure"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-space-before-equals-is-null",
+   "headers": {
+    "forwarded": "for =203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-space-after-equals-is-null",
+   "headers": {
+    "forwarded": "for= 203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-ipv4-with-port",
+   "headers": {
+    "forwarded": "for=203.0.113.7:4711"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-ipv4-with-port-quoted",
+   "headers": {
+    "forwarded": "for=\"203.0.113.7:4711\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-ipv4-with-a-word-for-a-port-is-null",
+   "headers": {
+    "forwarded": "for=203.0.113.7:http"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-ipv4-with-a-long-port-is-null",
+   "headers": {
+    "forwarded": "for=203.0.113.7:123456"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-ipv4-with-an-empty-port-is-null",
+   "headers": {
+    "forwarded": "for=203.0.113.7:"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-ipv6-quoted-and-bracketed",
+   "headers": {
+    "forwarded": "for=\"[2001:DB8:0:0:0:0:0:1]\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "2001:db8::1"
+  },
+  {
+   "name": "forwarded-ipv6-with-port",
+   "headers": {
+    "forwarded": "for=\"[2001:db8::1]:4711\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "2001:db8::1"
+  },
+  {
+   "name": "forwarded-ipv6-bracketed-without-quotes",
+   "headers": {
+    "forwarded": "for=[2001:db8::1]"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "2001:db8::1"
+  },
+  {
+   "name": "forwarded-ipv6-without-brackets-is-null",
+   "headers": {
+    "forwarded": "for=\"2001:db8::1\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-ipv6-mapped-becomes-ipv4",
+   "headers": {
+    "forwarded": "for=\"[::ffff:203.0.113.7]\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-ipv4-in-brackets-is-null",
+   "headers": {
+    "forwarded": "for=\"[203.0.113.7]\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-bracket-not-closed-is-null",
+   "headers": {
+    "forwarded": "for=\"[2001:db8::1\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-text-after-the-bracket-is-null",
+   "headers": {
+    "forwarded": "for=\"[2001:db8::1]x\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-zone-is-null",
+   "headers": {
+    "forwarded": "for=\"[fe80::1%eth0]\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-unknown-is-null",
+   "headers": {
+    "forwarded": "for=unknown"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-obfuscated-is-null",
+   "headers": {
+    "forwarded": "for=_hidden"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-quote-not-closed-is-null",
+   "headers": {
+    "forwarded": "for=\"203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-quote-inside-is-null",
+   "headers": {
+    "forwarded": "for=\"203.0.113.7\"\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-escape-inside-is-null",
+   "headers": {
+    "forwarded": "for=\"203.0.113.7\\\""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-empty-value-is-null",
+   "headers": {
+    "forwarded": "for="
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-a-quote-opened-by-the-client-does-not-swallow-the-trusted-element",
+   "headers": {
+    "forwarded": "for=\"6.6.6.6, for=203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": "203.0.113.7"
+  },
+  {
+   "name": "forwarded-a-comma-inside-quotes-still-separates",
+   "headers": {
+    "forwarded": "for=\"6.6.6.6,198.51.100.2\", for=203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 1
+    }
+   },
+   "expect": null
+  },
+  {
+   "name": "forwarded-x-forwarded-for-is-not-read",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": null
+  },
+  {
    "name": "cloudflare-reads-its-header",
    "headers": {
     "cf-connecting-ip": "203.0.113.7",

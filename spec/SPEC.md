@@ -448,6 +448,18 @@ true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
   the chain and from a single-IP header. Any other character makes the value invalid.
   Anything to the left of what your own proxies appended is client controlled.
 - A chain with `hops` entries or fewer gives `null`. It never falls back to the first value.
+- `forwarded` with `hops` reads the `Forwarded` header of RFC 7239 the same way: split into
+  elements, take the one `hops` positions from the right, and use its `for` parameter.
+  - Elements are split on every comma, and the parameters of the chosen element on every
+    semicolon, even inside a quoted string. A quote opened in an element the client wrote must
+    not swallow the one a trusted proxy appended, and no address contains either character.
+  - A parameter is `name=value` with nothing around the `=`; spaces and tabs around a parameter
+    are trimmed, and an empty one is skipped. Names compare without case. The element must have
+    exactly one `for`, and every parameter in it must have an `=`.
+  - The value may be in double quotes. Inside them, a quote or a backslash makes it invalid.
+  - The value is an IPv4 address, or an IPv6 address in square brackets, each optionally followed
+    by `:` and a port of one to five digits. The port is dropped. `unknown`, an obfuscated
+    identifier, an IPv6 address without brackets and an IPv4 address inside them are invalid.
 - An invalid value in the chosen position gives `null`.
 - IPv4 uses strict decimal octets. IPv6 follows RFC 5952, zone identifiers are rejected, and
   IPv4-mapped addresses become IPv4.

@@ -57,6 +57,15 @@ def _load() -> list[dict[str, Any]]:
 ALL_VECTORS = _load()
 
 
+def strategy_kwargs(strategy: dict[str, Any]) -> dict[str, Any]:
+    """An `ip` vector's strategy as the keyword arguments of `resolve_client_ip`."""
+    if "preset" in strategy:
+        return {"preset": strategy["preset"]}
+    if "forwarded" in strategy:
+        return {"forwarded_hops": strategy["forwarded"]["hops"]}
+    return {"xff_hops": strategy["xff"]["hops"]}
+
+
 def vectors_of(kind: str) -> list[dict[str, Any]]:
     return [vector for vector in ALL_VECTORS if vector["kind"] == kind]
 

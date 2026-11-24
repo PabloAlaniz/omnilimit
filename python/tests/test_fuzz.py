@@ -19,6 +19,7 @@ from support import (
     run_recipe_async,
     run_sequence,
     run_sequence_async,
+    strategy_kwargs,
 )
 
 from omnilimit import MemoryStore
@@ -89,11 +90,7 @@ def test_fuzz_client_ips() -> None:
     for vector in fuzz_of("ip"):
         for case in vector["cases"]:
             strategy = case["strategy"]
-            kwargs: dict[str, Any] = (
-                {"preset": strategy["preset"]}
-                if "preset" in strategy
-                else {"xff_hops": strategy["xff"]["hops"]}
-            )
+            kwargs = strategy_kwargs(strategy)
             got = resolve_client_ip(case["headers"], case.get("peer"), **kwargs)
             assert got == case["expect"], f"seed {SEED}: {case!r}"
         for mask in vector["masks"]:

@@ -359,6 +359,24 @@ CORE = [
     ),
     ("zone identifiers accepted", "ip.py", 'if "%" in raw:', "if False:"),
     (
+        "Forwarded read from the left",
+        "ip.py",
+        'for raw in elements[len(elements) - 1 - hops].split(";"):',
+        'for raw in elements[0].split(";"):',
+    ),
+    (
+        "Forwarded: a second for in the element is accepted",
+        "ip.py",
+        "        if node is not None:\n            return None\n        node = text",
+        "        node = text",
+    ),
+    (
+        "Forwarded: an IPv6 address without brackets is accepted",
+        "ip.py",
+        "    if colon and _PORT.fullmatch(port) is None:\n        return None\n    return canonical_ip(host)",
+        "    if colon and _PORT.fullmatch(port) is None:\n        return canonical_ip(node)\n    return canonical_ip(host)",
+    ),
+    (
         "X-Forwarded-For trimmed of whatever the language calls whitespace",
         "ip.py",
         'entries = [entry.strip(_OWS) for entry in value.split(",")]',

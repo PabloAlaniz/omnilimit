@@ -7,7 +7,7 @@ import { assertScope, parsePolicy, resolvePolicy } from '../../src/core/gcra.js'
 import { deriveKey } from '../../src/core/key.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
-import { canonicalIp, maskIp, resolveClientIp } from '../../src/ip/index.js';
+import { canonicalIp, maskIp, resolveClientIp, type IpStrategy } from '../../src/ip/index.js';
 import type { Store } from '../../src/core/types.js';
 import { allVectors, runConcurrency, runRecipe, runSequence, shadowedField, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
 
@@ -60,7 +60,7 @@ describe('key vectors', () => {
 describe('ip vectors', () => {
   const [vector] = vectorsOf('ip');
   it.each<[string, Vector]>(vector.cases.map((c: Vector) => [c.name, c]))('%s', (_name, c) => {
-    const strategy = c.strategy.preset ? { preset: c.strategy.preset } : { xff: c.strategy.xff };
+    const strategy = c.strategy as IpStrategy;
     expect(resolveClientIp({ headers: c.headers, peer: c.peer }, strategy)).toBe(c.expect);
     // A fetch `Headers` object must behave the same as a plain Node headers record.
     expect(resolveClientIp({ headers: new Headers(c.headers), peer: c.peer }, strategy)).toBe(c.expect);

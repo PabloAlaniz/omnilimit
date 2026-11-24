@@ -516,6 +516,54 @@ def from_xff(value: str | None, hops: int) -> str | None:
     return canonical(parts[len(parts) - 1 - hops])
 
 
+def is_port(text: str) -> bool:
+    return 1 <= len(text) <= 5 and all(c in "0123456789" for c in text)
+
+
+def from_forwarded(value: str | None, hops: int) -> str | None:
+    """The `for` of the element `hops` positions from the right of a `Forwarded` header."""
+    if value is None:
+        return None
+    # Every comma, even inside a quoted string: a quote the client opened must not be able to
+    # swallow the element a trusted proxy appended.
+    elements = value.split(",")
+    if len(elements) <= hops:
+        return None
+    node = None
+    for pair in elements[len(elements) - 1 - hops].split(";"):
+        pair = pair.strip(" \t")
+        if pair == "":
+            continue
+        name, equals, text = pair.partition("=")
+        if not equals:
+            return None
+        if name.lower() != "for":
+            continue
+        if node is not None:
+            return None
+        node = text
+    if node is None:
+        return None
+    if node.startswith('"'):
+        if len(node) < 2 or not node.endswith('"'):
+            return None
+        node = node[1:-1]
+        if '"' in node or "\\" in node:
+            return None
+    if node.startswith("["):
+        end = node.find("]")
+        if end == -1:
+            return None
+        host, rest = node[1:end], node[end + 1 :]
+        if ":" not in host or (rest and not (rest[0] == ":" and is_port(rest[1:]))):
+            return None
+        return canonical(host)
+    host, colon, port = node.partition(":")
+    if colon and not is_port(port):
+        return None
+    return canonical(host)
+
+
 def masked(ip: str | None, prefix: int) -> str | None:
     if ip is None:
         return None
@@ -571,6 +619,59 @@ def ips() -> dict[str, dict]:
     xff("form-feed-is-not-whitespace", f"{spoof}, {client}\u000c", 0)
     xff("next-line-is-not-whitespace", f"{spoof}, {client}\u0085", 0)
     xff("unit-separator-is-not-whitespace", f"{spoof}, \u001f{client}", 0)
+
+    def fwd(name, value, hops):
+        cases.append(
+            {
+                "name": f"forwarded-{name}",
+                "headers": {} if value is None else {"forwarded": value},
+                "peer": "10.0.0.1",
+                "strategy": {"forwarded": {"hops": hops}},
+                "expect": from_forwarded(value, hops),
+            }
+        )
+
+    # RFC 7239. The same rule as X-Forwarded-For: count from the right, never guess.
+    fwd("rightmost-with-zero-hops", f"for={spoof}, for={client}", 0)
+    fwd("spoofed-left-elements-are-ignored", f"for={spoof}, for=7.7.7.7, for={client};proto=https, for={lb}", 1)
+    fwd("chain-shorter-than-hops-is-null", f"for={client}", 1)
+    fwd("missing-header-is-null", None, 0)
+    fwd("empty-header-is-null", "", 0)
+    fwd("other-parameters-around-it", f"by=10.0.0.9;for={client};host=example.com;proto=https", 0)
+    fwd("parameter-name-in-any-case", f"For={client}", 0)
+    fwd("spaces-around-pairs", f"for={spoof},  for={client} ; proto=https ", 0)
+    fwd("empty-pairs-are-skipped", f";for={client};;", 0)
+    fwd("element-without-for-is-null", f"for={spoof}, proto=https;by=10.0.0.9", 0)
+    fwd("two-for-in-one-element-is-null", f"for={client};for={spoof}", 0)
+    fwd("pair-without-equals-is-null", f"for={client};secure", 0)
+    fwd("space-before-equals-is-null", f"for ={client}", 0)
+    fwd("space-after-equals-is-null", f"for= {client}", 0)
+    fwd("ipv4-with-port", f"for={client}:4711", 0)
+    fwd("ipv4-with-port-quoted", f'for="{client}:4711"', 0)
+    fwd("ipv4-with-a-word-for-a-port-is-null", f"for={client}:http", 0)
+    fwd("ipv4-with-a-long-port-is-null", f"for={client}:123456", 0)
+    fwd("ipv4-with-an-empty-port-is-null", f"for={client}:", 0)
+    fwd("ipv6-quoted-and-bracketed", 'for="[2001:DB8:0:0:0:0:0:1]"', 0)
+    fwd("ipv6-with-port", 'for="[2001:db8::1]:4711"', 0)
+    fwd("ipv6-bracketed-without-quotes", "for=[2001:db8::1]", 0)
+    fwd("ipv6-without-brackets-is-null", 'for="2001:db8::1"', 0)
+    fwd("ipv6-mapped-becomes-ipv4", f'for="[::ffff:{client}]"', 0)
+    fwd("ipv4-in-brackets-is-null", f'for="[{client}]"', 0)
+    fwd("bracket-not-closed-is-null", 'for="[2001:db8::1"', 0)
+    fwd("text-after-the-bracket-is-null", 'for="[2001:db8::1]x"', 0)
+    fwd("zone-is-null", 'for="[fe80::1%eth0]"', 0)
+    fwd("unknown-is-null", "for=unknown", 0)
+    fwd("obfuscated-is-null", "for=_hidden", 0)
+    fwd("quote-not-closed-is-null", f'for="{client}', 0)
+    fwd("quote-inside-is-null", f'for="{client}""', 0)
+    fwd("escape-inside-is-null", f'for="{client}\\"', 0)
+    fwd("empty-value-is-null", "for=", 0)
+    # The client opens a quote and never closes it. Split with respect for quotes, the element
+    # the proxy appended would vanish into the client's; split on every comma, it stands.
+    fwd("a-quote-opened-by-the-client-does-not-swallow-the-trusted-element", f'for="{spoof}, for={client}', 0)
+    fwd("a-comma-inside-quotes-still-separates", f'for="{spoof},{lb}", for={client}', 1)
+    fwd("x-forwarded-for-is-not-read", None, 0)
+    cases[-1]["headers"] = {"x-forwarded-for": client}
 
     for name, headers_, peer, preset, expect in [
         ("cloudflare-reads-its-header", {"cf-connecting-ip": client, "x-forwarded-for": spoof}, "10.0.0.1", "cloudflare", client),
