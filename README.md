@@ -74,6 +74,8 @@ app.post('/login', rateLimit({
 }));
 ```
 
+For a standard error body, `problemDetails: true` answers with `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)) in every adapter.
+
 Anywhere else, call the limiter yourself:
 
 ```ts
@@ -205,7 +207,7 @@ import { resolveClientIp } from 'omnilimit/ip';
 const ip = resolveClientIp({ headers: req.headers, peer: req.socket.remoteAddress }, { xff: { hops: 1 } });
 ```
 
-It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) before choosing a preset: each one is only safe in a specific deployment.
+It returns `null` instead of guessing, and reads the standard `Forwarded` header too. Read [client IP](docs/client-ip.md) before choosing a preset: each one is only safe in a specific deployment. `explainClientIp` tells you when the one you chose looks wrong, such as an address that is your own load balancer's.
 
 ## Good to know
 
@@ -221,6 +223,8 @@ Vectors come from a separate generator that shares no code with any port, so no 
 Beyond the fixed vectors, every run draws new ones from the model, drives both ports through every interleaving of the recipes in small scopes, cuts connections between real clients and real stores, and counts the calls each operation makes. See the [conformance matrix](docs/matrix.md) and the [benchmarks](docs/benchmarks.md).
 
 Releases are built in CI and published with provenance, with no runtime dependencies. [Quality and security practices](docs/quality.md) lists each practice with its evidence and how to verify a release, and the [threat model](docs/threat-model.md) says what the library defends against.
+
+What stays the same between releases, the stored state included, is in [stability](docs/stability.md).
 
 Other libraries may suit you better: see [how it compares](docs/compare.md) and the [roadmap](docs/roadmap.md).
 
