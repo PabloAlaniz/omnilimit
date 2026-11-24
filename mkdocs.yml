@@ -7,5 +7,7 @@ nav:
   - Stores: stores.md
   - Client IP: client-ip.md
   - Conformance matrix: matrix.md
+  - Quality and security: quality.md
+  - Threat model: threat-model.md
   - How it compares: compare.md
   - Roadmap: roadmap.md

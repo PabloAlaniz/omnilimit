@@ -17,6 +17,8 @@ jobs:
     outputs:
       ts_released: ${{ steps.release.outputs['ts--release_created'] }}
       py_released: ${{ steps.release.outputs['python--release_created'] }}
+      ts_tag: ${{ steps.release.outputs['ts--tag_name'] }}
+      py_tag: ${{ steps.release.outputs['python--tag_name'] }}
       pr: ${{ steps.release.outputs.pr }}
       own_token: ${{ steps.token.outputs.own }}
     steps:
@@ -98,3 +100,39 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: python/dist
+
+  # A CycloneDX bill of materials for each released package, attached to its GitHub release.
+  # Both packages have no runtime dependencies, and the file is what states it.
+  sbom:
+    needs: release-please
+    if: needs.release-please.outputs.ts_released == 'true' || needs.release-please.outputs.py_released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # attach the files to the release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@9bbca1e9dc2902adb87e8780fe5c98796985a62d # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24" }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { version: "0.13.x" }
+      - name: npm package
+        if: needs.release-please.outputs.ts_released == 'true'
+        env:
+          TAG: ${{ needs.release-please.outputs.ts_tag }}
+        run: |
+          pnpm install --frozen-lockfile
+          (cd ts && npm sbom --sbom-format cyclonedx --omit dev) > omnilimit-npm.cdx.json
+          gh release upload "$TAG" omnilimit-npm.cdx.json --clobber
+      - name: Python package
+        if: needs.release-please.outputs.py_released == 'true'
+        env:
+          TAG: ${{ needs.release-please.outputs.py_tag }}
+        run: |
+          (cd python && uv export --format cyclonedx1.5 --no-dev --locked) > omnilimit-pypi.cdx.json
+          gh release upload "$TAG" omnilimit-pypi.cdx.json --clobber

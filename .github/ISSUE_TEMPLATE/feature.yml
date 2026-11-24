@@ -1,0 +1,25 @@
+name: Feature request
+description: Something omnilimit does not do yet
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/PabloAlaniz/omnilimit/blob/main/docs/roadmap.md) first: it lists what is next, what is later and what is not planned, with the reasons.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are building and where the library stops you. A real case is worth more than a general one.
+    validations: { required: true }
+  - type: textarea
+    id: shape
+    attributes:
+      label: The shape it could take
+      description: Optional. Behaviour has to be the same in every port and store of its tier, and be expressible as vectors.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Where it would live
+      options: [Spec and every port, A store, An adapter, Client IP, Docs, Not sure]
+    validations: { required: true }

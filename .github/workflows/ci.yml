@@ -7,6 +7,10 @@ on:
   # The release workflow starts this on the release branch: a pull request opened with the
   # workflow token does not trigger `pull_request`, and the checks are required to merge.
   workflow_dispatch:
+  # Store images and toolchains move under fixed tags. A weekly run on `main` finds what changed
+  # outside the repository before a contributor does.
+  schedule:
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
@@ -31,6 +35,20 @@ jobs:
         with: { python-version: "3.12" }
       - run: python tools/gen_vectors.py --check
       - run: python tools/sync_assets.py --check
+
+  pinned:
+    name: actions pinned by commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      # A tag can be moved to other code. Every `uses:` names a full commit, or a local path.
+      - run: |
+          if grep -rnE '^\s*(-\s+)?uses:' .github/workflows | grep -vE 'uses:\s+(\./|[^@ ]+@[0-9a-f]{40}( |$))'; then
+            echo "::error::pin these actions to a full commit SHA"
+            exit 1
+          fi
 
   core:
     name: core (node ${{ matrix.node }})
@@ -205,7 +223,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [spec, core, stores, workerd, package, mutants, python-core, python-stores, python-package, python-mutants]
+    needs: [spec, pinned, core, stores, workerd, package, mutants, python-core, python-stores, python-package, python-mutants]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

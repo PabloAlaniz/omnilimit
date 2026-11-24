@@ -1,0 +1,40 @@
+name: Scorecard
+
+# An outside audit of the repository's own practices: pinned actions, token permissions, branch
+# protection, dangerous workflow patterns. Results go to the Security tab and to the public
+# Scorecard API, which the README badge reads.
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "23 5 * * 2"
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Scheduled and push runs only on the default branch; a fork has nothing to publish.
+    if: github.event.repository.default_branch == github.ref_name
+    permissions:
+      security-events: write # upload the results to code scanning
+      id-token: write # sign the published results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: ossf/scorecard-action@56eaeac26fc540dfface1f07f79b9426f1956b4d # v2.6.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard
+          path: results.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@e274593ecfcbcdc39c8f034978d84614cebcb71d # v4.39.5
+        with:
+          sarif_file: results.sarif

@@ -4,6 +4,7 @@ Rate limiting that behaves the same across stacks, and proves it.
 
 [![CI](https://github.com/PabloAlaniz/omnilimit/actions/workflows/ci.yml/badge.svg)](https://github.com/PabloAlaniz/omnilimit/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/PabloAlaniz/omnilimit/badge)](https://scorecard.dev/viewer/?uri=github.com/PabloAlaniz/omnilimit)
 
 > **Early release.** Available for TypeScript and [Python](python/README.md), using the same spec and vectors.
 
@@ -216,6 +217,8 @@ It returns `null` instead of guessing. Read [client IP](docs/client-ip.md) befor
 ## How it is verified
 
 Vectors come from a separate generator that shares no code with any port, so no port validates itself. CI runs them on Node 20, 22 and 24, Python 3.11 to 3.14, in real `workerd`, and against real Redis, Valkey and Postgres, where TypeScript and Python also share one counter. It also injects realistic bugs and fails if the suite does not catch them. See the [conformance matrix](docs/matrix.md).
+
+Releases are built in CI and published with provenance, with no runtime dependencies. [Quality and security practices](docs/quality.md) lists each practice with its evidence and how to verify a release, and the [threat model](docs/threat-model.md) says what the library defends against.
 
 Other libraries may suit you better: see [how it compares](docs/compare.md) and the [roadmap](docs/roadmap.md).
 
