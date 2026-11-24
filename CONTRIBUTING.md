@@ -2,6 +2,8 @@
 
 Thanks for taking the time.
 
+By taking part you agree to the [code of conduct](CODE_OF_CONDUCT.md). [Governance](GOVERNANCE.md) says who decides, and [quality and security practices](docs/quality.md) says what every change has to keep true. Report vulnerabilities privately: see [SECURITY](SECURITY.md).
+
 ## Setup
 
 Requires Node 20+, pnpm, Python 3.11+, uv and Docker.
@@ -49,6 +51,12 @@ If you fix a bug the suite missed, add a vector, and a mutant to `tools/run_muta
 ## Pull requests
 
 PRs are squash-merged, so titles must be [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`...). The title drives the changelog and the version. Coverage has a 95% floor.
+
+## Docs
+
+```bash
+uvx --from mkdocs==1.6.1 mkdocs build --strict   # what CI runs; `serve` to preview
+```
 
 ## Releases
 

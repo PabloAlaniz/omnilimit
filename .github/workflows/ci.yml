@@ -7,6 +7,10 @@ on:
   # The release workflow starts this on the release branch: a pull request opened with the
   # workflow token does not trigger `pull_request`, and the checks are required to merge.
   workflow_dispatch:
+  # Store images and toolchains move under fixed tags. A weekly run on `main` finds what changed
+  # outside the repository before a contributor does.
+  schedule:
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
