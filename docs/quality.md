@@ -36,7 +36,7 @@ Every change to behaviour goes through the same steps, and CI refuses a change t
 - **Runtime: none,** in either package. CI fails if the npm package gains one, and the Python package declares an empty list. Database clients and frameworks are the application's own.
 - **Development:** declared in `ts/package.json` and `python/pyproject.toml`, locked in `pnpm-lock.yaml` and `python/uv.lock`, and installed frozen in CI.
 - **Updates:** Dependabot proposes them weekly, a week after each version is published. Security updates do not wait.
-- **GitHub Actions** are pinned to a commit, with the version in a comment.
+- **GitHub Actions** are pinned to a commit, with the version in a comment. CI fails on one that is not.
 
 ### Vulnerabilities and static analysis
 
