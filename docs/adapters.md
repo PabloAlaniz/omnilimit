@@ -131,6 +131,29 @@ Two things to know:
 - A middleware runs before routing and before any dependency, so it cannot key by an identity resolved later. Use the FastAPI dependency for that.
 - If you also use a CORS middleware, add this one first so CORS ends up outermost. Otherwise browsers hide the `429` from your frontend.
 
+## Problem details
+
+By default a denied request gets `{"error": "rate_limited"}`. Every adapter can answer with a problem details body instead ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)), sent as `application/problem+json` with the same status and headers:
+
+```ts
+rateLimit({ limiter, key, onMissingKey: 'reject', problemDetails: true });
+```
+
+```python
+app.add_exception_handler(RateLimitDenied, denied_handler)   # FastAPI needs the handler
+limit = rate_limit(limiter, key=key, on_missing_key="reject", problem_details=True)
+
+app.add_middleware(RateLimitMiddleware, limiter=limiter, key=key, on_missing_key="reject", problem_details=True)
+```
+
+```json
+{"type":"about:blank","title":"Too Many Requests","status":429,"detail":"Rate limit exceeded.","error":"rate_limited","retry_after":60}
+```
+
+It covers the three denials: 429 when limited, 503 when the store failed closed, 400 when the client could not be identified. `error` is the code to act on, the same one the default body carries, and `retry_after` repeats the `Retry-After` header when there is one. The body is the same in every port, to the byte: see the [spec](https://github.com/PabloAlaniz/omnilimit/blob/main/spec/SPEC.md#problem-details).
+
+`onDenied` takes precedence. To add members of your own, build on the same body there: `problemDetails(denial)` in TypeScript, `problem_details(denial)` in Python, both exported by each adapter.
+
 ## Letting some requests through
 
 `skip` returns `true` for requests that should pass without being counted: a health check, a test environment, a feature flag. It runs before `key`, and a skipped response carries no rate limit headers.

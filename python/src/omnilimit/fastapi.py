@@ -17,10 +17,13 @@ from fastapi import Depends, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 
 from omnilimit._adapter import (
+    PROBLEM_JSON,
     Denial,
     DenialError,
     MissingKeyPolicy,
     check_policy,
+    problem_body,
+    problem_details,
 )
 from omnilimit._adapter import (
     denial_of as _denial,
@@ -33,6 +36,7 @@ from omnilimit._types import Decision
 from omnilimit.ip import IpPreset, client_key
 
 __all__ = [
+    "PROBLEM_JSON",
     "CostFn",
     "Denial",
     "DenialError",
@@ -45,6 +49,7 @@ __all__ = [
     "SkipFn",
     "denied_handler",
     "ip_key",
+    "problem_details",
     "rate_limit",
 ]
 
@@ -125,13 +130,24 @@ def _default_denial(denial: Denial) -> HTTPException:
     return HTTPException(status_code=denial.status, detail=denial.error, headers=denial.headers)
 
 
-def _check_handler(request: Request) -> None:
+def _check_handler(request: Request, option: str = "on_denied") -> None:
     # Without the handler, FastAPI would answer the default HTTPException body and drop the
-    # response the hook built: fail loudly instead.
+    # response that was built: fail loudly instead.
     if RateLimitDenied not in request.app.exception_handlers:
         raise TypeError(
-            "omnilimit: on_denied needs app.add_exception_handler(RateLimitDenied, denied_handler)"
+            f"omnilimit: {option} needs app.add_exception_handler(RateLimitDenied, denied_handler)"
         )
+
+
+def _problem(request: Request, denial: Denial) -> HTTPException:
+    _check_handler(request, "problem_details")
+    response = Response(
+        content=problem_body(denial),
+        status_code=denial.status,
+        media_type=PROBLEM_JSON,
+        headers=denial.headers,
+    )
+    return RateLimitDenied(denial, response)
 
 
 def _pass(decision: Decision, response: Response) -> None:
@@ -181,11 +197,14 @@ def rate_limit(
     skip: SkipFn | None = None,
     identity: Callable[..., Any] | None = None,
     cost: CostFn | None = None,
+    problem_details: bool = False,
 ) -> Callable[..., Any]:
     """Build a dependency: `Depends(rate_limit(limiter, key=..., on_missing_key=...))`.
 
     `on_missing_key` is required so a misconfigured proxy cannot pass unnoticed. `on_denied`
     builds the response for every denial (429, 503 and 400); it needs `denied_handler`.
+    `problem_details=True` answers them with a problem details body (RFC 9457) instead, as
+    `application/problem+json`; it needs `denied_handler` too, and `on_denied` takes precedence.
     `skip` returns `True` for requests to let through uncounted and without headers: a health
     check, a test environment, a feature flag. It runs before `key`.
 
@@ -205,7 +224,7 @@ def rate_limit(
 
         async def deny_async(request: Request, denial: Denial) -> HTTPException:
             if on_denied is None:
-                return _default_denial(denial)
+                return _problem(request, denial) if problem_details else _default_denial(denial)
             _check_handler(request)
             built = on_denied(request, denial)
             return RateLimitDenied(denial, await built if inspect.isawaitable(built) else built)
@@ -247,7 +266,7 @@ def rate_limit(
 
     def deny(request: Request, denial: Denial) -> HTTPException:
         if on_denied is None:
-            return _default_denial(denial)
+            return _problem(request, denial) if problem_details else _default_denial(denial)
         _check_handler(request)
         built: Any = on_denied(request, denial)
         if inspect.iscoroutine(built):

@@ -87,11 +87,54 @@ function toOutcome(decision: Decision): Outcome {
   return { kind: 'deny', status: decision.status ?? 429, headers: decision.headers, error, decision };
 }
 
-/** The default denial response: `{"error": "..."}` as JSON with the decision's headers. */
-export function defaultDenialResponse(denial: Denial): Response {
-  return new Response(JSON.stringify({ error: denial.error }), {
+/** The media type of a problem details body. */
+export const PROBLEM_JSON = 'application/problem+json';
+
+const PROBLEM_TITLES: Record<number, string> = { 400: 'Bad Request', 429: 'Too Many Requests', 503: 'Service Unavailable' };
+const PROBLEM_DETAILS: Record<Denial['error'], string> = {
+  rate_limited: 'Rate limit exceeded.',
+  rate_limiter_unavailable: 'The rate limiter is unavailable.',
+  client_not_identified: 'The client could not be identified.',
+};
+
+/** A denial as a problem details object (RFC 9457). Send it as `application/problem+json`. */
+export interface ProblemDetails {
+  type: 'about:blank';
+  /** The phrase of the status code, as RFC 9457 asks of `about:blank`. */
+  title: string;
+  status: number;
+  detail: string;
+  /** The code to act on: the same one the default body carries. */
+  error: Denial['error'];
+  /** Seconds to wait, when the denial has a `Retry-After` header. */
+  retry_after?: number;
+}
+
+/**
+ * The problem details body of a denial. Its members and their order are part of the spec, so
+ * `JSON.stringify` of it gives the same bytes in every port.
+ */
+export function problemDetails(denial: Pick<Denial, 'status' | 'error' | 'headers'>): ProblemDetails {
+  const body: ProblemDetails = {
+    type: 'about:blank',
+    title: PROBLEM_TITLES[denial.status] ?? 'Error',
     status: denial.status,
-    headers: { 'content-type': 'application/json', ...denial.headers },
+    detail: PROBLEM_DETAILS[denial.error],
+    error: denial.error,
+  };
+  const retryAfter = denial.headers['retry-after'];
+  if (retryAfter !== undefined) body.retry_after = Number(retryAfter);
+  return body;
+}
+
+/**
+ * The default denial response: `{"error": "..."}` as JSON with the decision's headers, or the
+ * problem details body when `problem` is set.
+ */
+export function defaultDenialResponse(denial: Denial, problem = false): Response {
+  return new Response(JSON.stringify(problem ? problemDetails(denial) : { error: denial.error }), {
+    status: denial.status,
+    headers: { 'content-type': problem ? PROBLEM_JSON : 'application/json', ...denial.headers },
   });
 }
 

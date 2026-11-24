@@ -1,6 +1,8 @@
 import {
   evaluate,
   ipKey,
+  PROBLEM_JSON,
+  problemDetails,
   toDenial,
   type Denial,
   type IpKeyOptions,
@@ -8,10 +10,11 @@ import {
   type KeyFn,
   type LimiterSource,
   type MissingKeyPolicy,
+  type ProblemDetails,
 } from './shared.js';
 
-export { ipKey };
-export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy };
+export { ipKey, PROBLEM_JSON, problemDetails };
+export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy, ProblemDetails };
 
 /** The parts of Express's request and response this adapter touches. */
 export interface ExpressRequestLike {
@@ -43,6 +46,11 @@ export interface ExpressRateLimitOptions<Req extends ExpressRequestLike = Expres
    * `res.status(status).json({ error })`.
    */
   onDenied?: (denial: Denial, req: Req, res: Res) => void | Promise<void>;
+  /**
+   * Answer a denied request with a problem details body (RFC 9457), as
+   * `application/problem+json`, instead of `{"error": "..."}`. `onDenied` takes precedence.
+   */
+  problemDetails?: boolean;
 }
 
 /**
@@ -60,7 +68,11 @@ export function rateLimit<Req extends ExpressRequestLike = ExpressRequestLike, R
       if (outcome.kind === 'deny') {
         const denial = toDenial(outcome);
         if (options.onDenied) await options.onDenied(denial, req, res);
-        else res.status(denial.status).json({ error: denial.error });
+        else if (options.problemDetails) {
+          // Express keeps a content type that is already set when it sends JSON.
+          res.setHeader('content-type', PROBLEM_JSON);
+          res.status(denial.status).json(problemDetails(denial));
+        } else res.status(denial.status).json({ error: denial.error });
         return;
       }
       next();

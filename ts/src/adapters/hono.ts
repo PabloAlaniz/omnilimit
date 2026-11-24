@@ -2,6 +2,8 @@ import {
   defaultDenialResponse,
   evaluate,
   ipKey,
+  PROBLEM_JSON,
+  problemDetails,
   toDenial,
   type Denial,
   type IpKeyOptions,
@@ -9,10 +11,11 @@ import {
   type KeyFn,
   type LimiterSource,
   type MissingKeyPolicy,
+  type ProblemDetails,
 } from './shared.js';
 
-export { ipKey };
-export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy };
+export { ipKey, PROBLEM_JSON, problemDetails };
+export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy, ProblemDetails };
 
 /** The parts of Hono's `Context` this adapter touches. */
 export interface HonoContextLike {
@@ -42,6 +45,11 @@ export interface HonoRateLimitOptions<C extends HonoContextLike = HonoContextLik
    * denial headers are set on the context before it runs.
    */
   onDenied?: (denial: Denial, c: C) => Response | Promise<Response>;
+  /**
+   * Answer a denied request with a problem details body (RFC 9457), as
+   * `application/problem+json`, instead of `{"error": "..."}`. `onDenied` takes precedence.
+   */
+  problemDetails?: boolean;
 }
 
 function nodePeer(c: HonoContextLike): string | null {
@@ -55,7 +63,7 @@ export function rateLimit<C extends HonoContextLike = HonoContextLike>(options: 
     const outcome = await evaluate(options, { headers: c.req.raw.headers, peer: readPeer(c) ?? null, c });
     if (outcome.kind === 'deny') {
       const denial = toDenial(outcome);
-      if (!options.onDenied) return defaultDenialResponse(denial);
+      if (!options.onDenied) return defaultDenialResponse(denial, options.problemDetails);
       for (const [name, value] of Object.entries(denial.headers)) c.header(name, value);
       return options.onDenied(denial, c);
     }

@@ -1,0 +1,90 @@
+{
+ "spec": "1",
+ "id": "contract/problem-details",
+ "kind": "contract",
+ "subject": "problem",
+ "cases": [
+  {
+   "error": "rate_limited",
+   "status": 429,
+   "headers": {
+    "retry-after": "12"
+   },
+   "expect": {
+    "type": "about:blank",
+    "title": "Too Many Requests",
+    "status": 429,
+    "detail": "Rate limit exceeded.",
+    "error": "rate_limited",
+    "retry_after": 12
+   },
+   "json": "{\"type\":\"about:blank\",\"title\":\"Too Many Requests\",\"status\":429,\"detail\":\"Rate limit exceeded.\",\"error\":\"rate_limited\",\"retry_after\":12}"
+  },
+  {
+   "error": "rate_limited",
+   "status": 429,
+   "headers": {
+    "retry-after": "1",
+    "ratelimit-policy": "\"login\";q=5;w=60",
+    "ratelimit": "\"login\";r=0;t=1"
+   },
+   "expect": {
+    "type": "about:blank",
+    "title": "Too Many Requests",
+    "status": 429,
+    "detail": "Rate limit exceeded.",
+    "error": "rate_limited",
+    "retry_after": 1
+   },
+   "json": "{\"type\":\"about:blank\",\"title\":\"Too Many Requests\",\"status\":429,\"detail\":\"Rate limit exceeded.\",\"error\":\"rate_limited\",\"retry_after\":1}"
+  },
+  {
+   "error": "rate_limited",
+   "status": 429,
+   "headers": {
+    "retry-after": "86400",
+    "x-ratelimit-limit": "5",
+    "x-ratelimit-remaining": "0",
+    "x-ratelimit-reset": "86400"
+   },
+   "expect": {
+    "type": "about:blank",
+    "title": "Too Many Requests",
+    "status": 429,
+    "detail": "Rate limit exceeded.",
+    "error": "rate_limited",
+    "retry_after": 86400
+   },
+   "json": "{\"type\":\"about:blank\",\"title\":\"Too Many Requests\",\"status\":429,\"detail\":\"Rate limit exceeded.\",\"error\":\"rate_limited\",\"retry_after\":86400}"
+  },
+  {
+   "error": "rate_limiter_unavailable",
+   "status": 503,
+   "headers": {
+    "retry-after": "1"
+   },
+   "expect": {
+    "type": "about:blank",
+    "title": "Service Unavailable",
+    "status": 503,
+    "detail": "The rate limiter is unavailable.",
+    "error": "rate_limiter_unavailable",
+    "retry_after": 1
+   },
+   "json": "{\"type\":\"about:blank\",\"title\":\"Service Unavailable\",\"status\":503,\"detail\":\"The rate limiter is unavailable.\",\"error\":\"rate_limiter_unavailable\",\"retry_after\":1}"
+  },
+  {
+   "error": "client_not_identified",
+   "status": 400,
+   "headers": {},
+   "expect": {
+    "type": "about:blank",
+    "title": "Bad Request",
+    "status": 400,
+    "detail": "The client could not be identified.",
+    "error": "client_not_identified"
+   },
+   "json": "{\"type\":\"about:blank\",\"title\":\"Bad Request\",\"status\":400,\"detail\":\"The client could not be identified.\",\"error\":\"client_not_identified\"}"
+  }
+ ]
+}

@@ -839,6 +839,33 @@ def contract() -> dict[str, dict]:
     }
 
 
+PROBLEM_TITLES = {400: "Bad Request", 429: "Too Many Requests", 503: "Service Unavailable"}
+PROBLEM_DETAILS = {
+    "rate_limited": "Rate limit exceeded.",
+    "rate_limiter_unavailable": "The rate limiter is unavailable.",
+    "client_not_identified": "The client could not be identified.",
+}
+
+
+def problem(error: str, status: int, headers: dict) -> dict:
+    """The problem details body (RFC 9457) of a denial, and its exact JSON text."""
+    body: dict = {"type": "about:blank", "title": PROBLEM_TITLES[status], "status": status, "detail": PROBLEM_DETAILS[error], "error": error}
+    if "retry-after" in headers:
+        body["retry_after"] = int(headers["retry-after"])
+    return {"error": error, "status": status, "headers": headers, "expect": body, "json": json.dumps(body, separators=(",", ":"))}
+
+
+def problems() -> dict[str, dict]:
+    cases = [
+        problem("rate_limited", 429, {"retry-after": "12"}),
+        problem("rate_limited", 429, {"retry-after": "1", "ratelimit-policy": '"login";q=5;w=60', "ratelimit": '"login";r=0;t=1'}),
+        problem("rate_limited", 429, {"retry-after": "86400", "x-ratelimit-limit": "5", "x-ratelimit-remaining": "0", "x-ratelimit-reset": "86400"}),
+        problem("rate_limiter_unavailable", 503, {"retry-after": "1"}),
+        problem("client_not_identified", 400, {}),
+    ]
+    return {"contract/problem-details": {"spec": SPEC, "id": "contract/problem-details", "kind": "contract", "subject": "problem", "cases": cases}}
+
+
 SHORTHAND_UNITS = {"second": 1000, "minute": 60_000, "hour": 3_600_000, "day": 86_400_000}
 
 
@@ -2150,7 +2177,7 @@ def recipe_concurrency() -> dict[str, dict]:
 
 def build() -> dict[str, dict]:
     out: dict[str, dict] = {}
-    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands(), recipes()):
+    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands(), problems(), recipes()):
         out.update(part)
     return out
 

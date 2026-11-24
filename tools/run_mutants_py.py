@@ -359,6 +359,12 @@ CORE = [
     ),
     ("zone identifiers accepted", "ip.py", 'if "%" in raw:', "if False:"),
     (
+        "problem details: retry_after left out",
+        "_adapter.py",
+        'if "retry-after" in denial.headers:',
+        "if False:",
+    ),
+    (
         "Forwarded read from the left",
         "ip.py",
         'for raw in elements[len(elements) - 1 - hops].split(";"):',

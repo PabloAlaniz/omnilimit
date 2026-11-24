@@ -26,17 +26,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from omnilimit._adapter import (
+    PROBLEM_JSON,
     Denial,
     DenialError,
     MissingKeyPolicy,
     check_policy,
     denial_of,
     missing_key,
+    problem_body,
+    problem_details,
 )
 from omnilimit._limiter import AsyncLimiter, Limiter
 from omnilimit.ip import IpPreset, client_key
 
 __all__ = [
+    "PROBLEM_JSON",
     "AsgiContext",
     "Denial",
     "DenialError",
@@ -45,6 +49,7 @@ __all__ = [
     "MissingKeyPolicy",
     "RateLimitMiddleware",
     "ip_key",
+    "problem_details",
 ]
 
 Scope = MutableMapping[str, Any]
@@ -135,7 +140,9 @@ class RateLimitMiddleware:
 
     `limiter` may be a blocking `Limiter`, which then runs in a worker thread, an
     `AsyncLimiter`, or a function of the context that returns either. `cost` returns how many
-    units a request weighs, from 1 to the limiter's burst.
+    units a request weighs, from 1 to the limiter's burst. `problem_details=True` answers a
+    denied request with a problem details body (RFC 9457) instead of `{"error": "..."}`;
+    `on_denied` takes precedence.
     """
 
     def __init__(
@@ -148,6 +155,7 @@ class RateLimitMiddleware:
         skip: SkipFn | None = None,
         on_denied: OnDenied | None = None,
         cost: CostFn | None = None,
+        problem_details: bool = False,
     ) -> None:
         check_policy(on_missing_key)
         self.app = app
@@ -156,6 +164,7 @@ class RateLimitMiddleware:
         self._on_missing_key: MissingKeyPolicy = on_missing_key
         self._skip = skip
         self._on_denied = on_denied
+        self._problem_details = problem_details
         self._cost = cost
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -210,10 +219,12 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send_with_headers)
 
     async def _deny(self, context: AsgiContext, denial: Denial, send: Send) -> None:
-        if self._on_denied is None:
-            built = DeniedResponse(body=json.dumps({"error": denial.error}).encode())
-        else:
+        if self._on_denied is not None:
             built = await _resolved(self._on_denied(context, denial))
+        elif self._problem_details:
+            built = DeniedResponse(body=problem_body(denial), media_type=PROBLEM_JSON)
+        else:
+            built = DeniedResponse(body=json.dumps({"error": denial.error}).encode())
         merged = {"content-type": built.media_type, **denial.headers, **built.headers}
         merged["content-length"] = str(len(built.body))
         await send(

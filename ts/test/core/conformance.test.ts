@@ -7,6 +7,7 @@ import { assertScope, parsePolicy, resolvePolicy } from '../../src/core/gcra.js'
 import { deriveKey } from '../../src/core/key.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
+import { problemDetails } from '../../src/adapters/shared.js';
 import { canonicalIp, maskIp, resolveClientIp, type IpStrategy } from '../../src/ip/index.js';
 import type { Store } from '../../src/core/types.js';
 import { allVectors, runConcurrency, runRecipe, runSequence, shadowedField, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
@@ -167,6 +168,16 @@ describe('contract vectors', () => {
     });
     await expect(limiter.check('x', { cost: 2 })).rejects.toThrow(TypeError);
     expect((await limiter.check('x', { cost: 1 })).allowed).toBe(true);
+  });
+
+  it('builds the problem details body, to the byte', () => {
+    const { cases } = bySubject('problem');
+    expect(cases.length).toBeGreaterThanOrEqual(5);
+    for (const c of cases) {
+      const body = problemDetails({ status: c.status, error: c.error, headers: c.headers });
+      expect(body, c.error).toEqual(c.expect);
+      expect(JSON.stringify(body), c.error).toBe(c.json);
+    }
   });
 
   it('reads the policy shorthand', () => {

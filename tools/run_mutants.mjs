@@ -18,6 +18,7 @@ const core = [
   ['X-Forwarded-For read from the left', 'ts/src/ip/index.ts', 'return canonicalIp(entries[entries.length - 1 - hops]);', 'return canonicalIp(entries[0]);'],
   ['short chain falls back to first value', 'ts/src/ip/index.ts', 'if (entries.length <= hops) return null;', 'if (entries.length <= hops) return canonicalIp(entries[0]);'],
   ['IPv4-mapped not normalised', 'ts/src/ip/index.ts', 'if (isMapped) {', 'if (false) {'],
+  ['problem details: retry_after left out', 'ts/src/adapters/shared.ts', 'if (retryAfter !== undefined) body.retry_after = Number(retryAfter);', ''],
   ['Forwarded read from the left', 'ts/src/ip/index.ts', "for (const raw of (elements[elements.length - 1 - hops] as string).split(';')) {", "for (const raw of (elements[0] as string).split(';')) {"],
   ['Forwarded: a second for in the element is accepted', 'ts/src/ip/index.ts', 'if (node !== null) return null;\n    node = pair.slice(equals + 1);', 'node = pair.slice(equals + 1);'],
   ['Forwarded: an IPv6 address without brackets is accepted', 'ts/src/ip/index.ts', "return PORT.test(node.slice(colon + 1)) ? canonicalIp(node.slice(0, colon)) : null;", "return PORT.test(node.slice(colon + 1)) ? canonicalIp(node.slice(0, colon)) : canonicalIp(node);"],

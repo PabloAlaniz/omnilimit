@@ -2,6 +2,8 @@ import {
   defaultDenialResponse,
   evaluate,
   ipKey,
+  PROBLEM_JSON,
+  problemDetails,
   toDenial,
   type Denial,
   type IpKeyOptions,
@@ -9,10 +11,11 @@ import {
   type KeyFn,
   type LimiterSource,
   type MissingKeyPolicy,
+  type ProblemDetails,
 } from './shared.js';
 
-export { ipKey };
-export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy };
+export { ipKey, PROBLEM_JSON, problemDetails };
+export type { Denial, IpKeyOptions, KeyContext, KeyFn, LimiterSource, MissingKeyPolicy, ProblemDetails };
 
 export interface WebKeyContext<Extra = unknown> extends KeyContext {
   request: Request;
@@ -42,6 +45,11 @@ export interface WebRateLimitOptions<Extra = unknown> {
    * `denial.headers` on so clients still see `Retry-After`. Defaults to `{"error": "..."}` as JSON.
    */
   onDenied?: (denial: Denial, request: Request) => Response | Promise<Response>;
+  /**
+   * Answer a denied request with a problem details body (RFC 9457), as
+   * `application/problem+json`, instead of `{"error": "..."}`. `onDenied` takes precedence.
+   */
+  problemDetails?: boolean;
 }
 
 export type WebCheckResult =
@@ -63,7 +71,7 @@ export async function checkRateLimit<Extra = undefined>(
   const outcome = await evaluate(options, { headers: request.headers, peer, request, extra });
   if (outcome.kind === 'deny') {
     const denial = toDenial(outcome);
-    return { denied: options.onDenied ? await options.onDenied(denial, request) : defaultDenialResponse(denial) };
+    return { denied: options.onDenied ? await options.onDenied(denial, request) : defaultDenialResponse(denial, options.problemDetails) };
   }
   return { headers: outcome.headers };
 }

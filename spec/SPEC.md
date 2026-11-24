@@ -491,6 +491,28 @@ The effective window is the retry time when denied, the time until the next unit
 `X-RateLimit-Remaining` and `X-RateLimit-Reset` (seconds, as a delta). `Retry-After`
 (`ceil(retry_after_ms/1000)`) is always sent on denial, in every profile including `none`.
 
+## Problem details
+
+An adapter answers a denied request with `{"error": "<code>"}` unless told otherwise. It can be
+asked for a problem details body instead (RFC 9457), sent as `application/problem+json` with the
+same status and headers:
+
+```text
+{"type":"about:blank","title":<title>,"status":<status>,"detail":<detail>,"error":<code>,"retry_after":<seconds>}
+```
+
+| `error` | Status | `title` | `detail` |
+|---|---|---|---|
+| `rate_limited` | 429 | `Too Many Requests` | `Rate limit exceeded.` |
+| `rate_limiter_unavailable` | 503 | `Service Unavailable` | `The rate limiter is unavailable.` |
+| `client_not_identified` | 400 | `Bad Request` | `The client could not be identified.` |
+
+- `type` is `about:blank`, for which RFC 9457 makes `title` the phrase of the status code. The
+  code a program should read is `error`, the same one the default body carries.
+- `retry_after` is the number in the `Retry-After` header, and is absent when the header is.
+- The members come in this order with no whitespace between them, so every port sends the same
+  bytes.
+
 ## Vector kinds
 
 | Kind | Tests |
@@ -500,7 +522,7 @@ The effective window is the retry time when denied, the time until the next unit
 | `ip` | Client IP strategies, canonical form and masking |
 | `failure` | Each fault with each failure mode, and a refund that fails |
 | `concurrency` | 200 simultaneous hits allow exactly `burst`; recipes run by many callers at once keep their bounds |
-| `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
+| `contract` | Policy, scope and cost validation, the policy shorthand, the approximate decision shape, and the problem details body |
 | `recipe` | Combined checks, pending checks and lockouts: store calls in order, decisions, the governing one, refunds, and errors |
 
 Changing the meaning of a vector requires a new spec version.

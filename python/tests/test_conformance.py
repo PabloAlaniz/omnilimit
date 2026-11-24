@@ -25,6 +25,7 @@ from support import (
 )
 
 from omnilimit import SPEC_VERSION, AsyncLimiter, HitParams, Limiter, MemoryStore, RawHit
+from omnilimit._adapter import Denial, problem_body, problem_details
 from omnilimit._gcra import assert_scope, parse_policy, resolve_policy
 from omnilimit._key import derive_key
 from omnilimit.ip import canonical_ip, mask_ip, resolve_client_ip
@@ -306,6 +307,15 @@ def test_cost_validation_async() -> None:
             await limiter.check("x", cost=5)
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("case", _contract("problem")["cases"], ids=lambda c: c["json"])
+def test_problem_details_to_the_byte(case: dict[str, Any]) -> None:
+    denial = Denial(
+        status=case["status"], headers=case["headers"], error=case["error"], decision=None
+    )
+    assert problem_details(denial) == case["expect"]
+    assert problem_body(denial) == case["json"].encode()
 
 
 @pytest.mark.parametrize("case", _contract("shorthand")["cases"], ids=lambda c: repr(c["text"]))
