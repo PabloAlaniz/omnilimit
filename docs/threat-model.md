@@ -44,7 +44,8 @@ The library has no network listener, no configuration file and no runtime depend
 | 12 | Filling the store with new keys | Redis sets a TTL of one drain period, a Durable Object deletes itself once drained, and the memory store holds at most `maxKeys` | Postgres needs `cleanup()` scheduled. A full memory store evicts live buckets, which resets their limits |
 | 13 | Locking a victim out by failing on their account | A lockout over several limits counts per account and per address, each with its own budget | A limit keyed only by account can be used against its owner: see [recipes](recipes.md) |
 | 14 | Learning a limit that is not enforced yet | Shadow mode sends no headers | In enforcing mode the headers state the policy, as the IETF draft intends. The `none` profile sends only `Retry-After` |
-| 15 | A tampered release or dependency | No runtime dependencies. Releases are built in CI and published with provenance through OIDC; actions are pinned by commit; lockfiles are frozen in CI | The maintainer's account is a single point of trust: see [governance](https://github.com/PabloAlaniz/omnilimit/blob/main/GOVERNANCE.md) |
+| 15 | A connection that drops between the store running a refund and its reply | The limiter spends a reservation before the call and never retries it | A client that resends commands by itself applies it twice. ioredis does by default: see [stores](stores.md#when-the-connection-drops) |
+| 16 | A tampered release or dependency | No runtime dependencies. Releases are built in CI and published with provenance through OIDC; actions are pinned by commit; lockfiles are frozen in CI | The maintainer's account is a single point of trust: see [governance](https://github.com/PabloAlaniz/omnilimit/blob/main/GOVERNANCE.md) |
 
 ## Out of scope
 

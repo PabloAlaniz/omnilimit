@@ -20,9 +20,22 @@ pnpm test:workerd   # real workerd: Durable Objects and the rate limit binding
 pnpm check:package  # publint and arethetypeswrong
 
 export OMNILIMIT_TEST_REDIS_URLS=redis://127.0.0.1:56379,redis://127.0.0.1:56380
+export OMNILIMIT_TEST_REDIS_CLUSTER_URLS=redis://127.0.0.1:56381
 export OMNILIMIT_TEST_POSTGRES_URLS=postgres://postgres:omnilimit@127.0.0.1:55415/omnilimit,postgres://postgres:omnilimit@127.0.0.1:55417/omnilimit
-pnpm test:stores    # real Redis, Valkey and Postgres
+pnpm test:stores    # real Redis, Valkey, a Redis cluster and Postgres, and the fault tests
 pnpm mutants        # injects bugs and fails if the suite misses one
+pnpm explore        # every interleaving of the recipes in the model: the bounds of the spec hold
+pnpm fuzz           # new vectors from a new seed, and every interleaving, on the memory store
+pnpm bench          # calls per operation, and what a check costs: add --check for the CI gate
+```
+
+`pnpm fuzz` writes its vectors to `.fuzz/` and prints the seed. To run them against the real stores too, or in Python, point `OMNILIMIT_FUZZ_VECTORS` at that directory:
+
+```bash
+export OMNILIMIT_FUZZ_VECTORS="$PWD/.fuzz"
+pnpm test:stores
+(cd python && uv run pytest tests/test_fuzz.py tests/test_stores.py)
+python3 tools/fuzz_vectors.py --seed 12345   # the same vectors again
 ```
 
 For Python, using [uv](https://docs.astral.sh/uv/) and the same exported URLs (written as `postgresql://` works too):
@@ -46,7 +59,7 @@ Behaviour lives in `spec/`, and ports follow it:
 3. Run `tools/sync_assets.py` if you touched `spec/scripts/`, and never edit `ts/src/generated/` or `python/src/omnilimit/_generated.py` by hand.
 4. Update the port until the vectors pass.
 
-If you fix a bug the suite missed, add a vector, and a mutant to `tools/run_mutants.mjs` or `tools/run_mutants_py.py` if it fits.
+If you fix a bug the suite missed, add a vector, and a mutant to `tools/run_mutants.mjs` or `tools/run_mutants_py.py` if it fits. That includes a failure of the fuzz run: reproduce it with its seed, then give the case a name in `tools/gen_vectors.py`, so that it stays fixed.
 
 ## Pull requests
 

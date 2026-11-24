@@ -37,6 +37,7 @@ Larger pieces, or ones that need a decision first.
 | Local deny cache | A denied client should not cost a store round trip until it may retry | In-process "blocked until" map honouring `retryAfterMs`, opt-in, tier stays honest |
 | Metrics | Dashboards without writing an `onEvent` hook | OpenTelemetry counters for allowed, limited, store error and latency |
 | Durable Object placement | Lower latency, data residency | `locationHint` and jurisdiction options for `durableObjectStore` |
+| Refunds that are safe to send twice | A client that resends a command after a reconnect applies a refund twice. Today that is avoided in the client's configuration | The store remembers which reservations it gave back, which needs a new state format |
 | Penalties | Repeat offenders wait longer | Escalating windows on top of peek and reset, if it can be specified without floats |
 | SQLite-compatible stores | Edge databases and single-file deployments have no Redis or Postgres | The hit as one atomic statement, if the engine can give the guarantees of the `exact` tier |
 | MySQL store | Some applications have only MySQL | The Postgres functions rewritten, with their own conformance run |

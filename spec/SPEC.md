@@ -151,6 +151,11 @@ ambiguity resolves to the reservation staying counted. Like a reset, a refund th
 out is reported as such and does not follow `open`/`closed`. A reservation belongs to the limiter
 that made it.
 
+"Never retries" has to hold all the way to the store. A refund is not idempotent: sent twice, it
+gives back twice. A store client that sends a command again by itself after losing a connection
+breaks the rule, and a port's documentation must say how to turn that off for each client that
+does it.
+
 Sequence vectors mark these steps with `op: "refund"` and `of`, the index of the earlier hit step
 being given back, which was allowed. The cost and `since` (its `state.ts`) come from that step.
 `expect` holds `refunded` and, when it is `true`, the `state` the store reported. A second refund

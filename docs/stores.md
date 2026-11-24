@@ -16,13 +16,27 @@ A missing operation raises a `TypeError`, which is a configuration mistake rathe
 
 ```ts
 import { fromIoredis, fromNodeRedis, redisStore } from 'omnilimit/redis';
-const store = redisStore(fromIoredis(client));   // ioredis
+const store = redisStore(fromIoredis(client));   // ioredis: see "When the connection drops"
 const store = redisStore(fromNodeRedis(client)); // node-redis
 ```
 
 The store runs one Lua script per hit, using `EVALSHA` and loading the script on `NOSCRIPT`. It uses the Redis server clock and sets a TTL so idle buckets disappear. `peek` runs a second, read-only script, `refund` a third, and `reset` is a `DEL`, so a hand-written `RedisEval` needs `del` for it.
 
 Other Redis-compatible services work if they support `EVALSHA`, `TIME` inside scripts and `PEXPIRE`, but only Redis and Valkey are in the test matrix. To connect another client, implement `RedisEval`.
+
+**Redis Cluster** works with the cluster client of ioredis, node-redis or redis-py: every script takes exactly one key. In Python, give the async cluster client enough connections for your concurrency (`max_connections`): past its limit it fails at once instead of waiting, and the limiter reports a store failure.
+
+### When the connection drops
+
+A store call whose reply is lost is a store failure: the limiter answers with your `onStoreError` choice at the timeout, and does not try again. The store may still have counted the hit, once.
+
+**ioredis sends commands again by default.** After it reconnects, it resends every command that had no reply yet, and the store runs it a second time. A hit is then counted twice, which only makes the limit stricter. A refund is applied twice, which gives back a unit the reservation never held. Turn it off on the connection the limiter uses:
+
+```ts
+const client = new Redis(process.env.REDIS_URL, { autoResendUnfulfilledCommands: false });
+```
+
+With that option, and with node-redis, pg, redis-py, valkey-py and psycopg as they come, a call that lost its connection is applied at most once. This is tested against real stores, by cutting the connection after the store ran the call.
 
 ## Postgres
 

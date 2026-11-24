@@ -10,6 +10,9 @@
     "test:workerd": "pnpm --filter omnilimit test:workerd",
     "check:package": "pnpm --filter omnilimit check:package",
     "mutants": "node tools/run_mutants.mjs",
+    "fuzz": "python3 tools/fuzz_vectors.py && OMNILIMIT_FUZZ_VECTORS=\"$PWD/.fuzz\" pnpm --filter omnilimit exec vitest run test/core/fuzz.test.ts",
+    "explore": "python3 tools/explore_interleavings.py",
+    "bench": "pnpm build && node tools/bench.mjs",
     "check:spec": "python3 tools/gen_vectors.py --check && python3 tools/sync_assets.py --check"
   }
 }

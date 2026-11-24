@@ -12,3 +12,4 @@ site/
 .env.*
 .coverage
 .coverage.*
+.fuzz/
