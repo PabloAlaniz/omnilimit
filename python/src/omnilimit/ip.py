@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 IpPreset = Literal["cloudflare", "cloud-run", "cloud-run-lb", "vercel", "direct"]
@@ -230,3 +231,118 @@ def resolve_client_ip(
         value = _read_header(headers, header.lower())
         return canonical_ip(value.strip(_OWS) if value is not None else None)
     return canonical_ip(peer)
+
+
+IpWarningCode = Literal[
+    "source_missing",
+    "chain_too_short",
+    "not_an_address",
+    "not_public",
+    "forwarding_headers_ignored",
+]
+
+_WARNINGS: dict[str, str] = {
+    "source_missing": (
+        "the header or peer address this strategy reads is absent: the request did not come "
+        "through the proxy you configured for"
+    ),
+    "chain_too_short": (
+        "the forwarding chain has no entry at this hop count: hops is higher than the number "
+        "of proxies that append to it"
+    ),
+    "not_an_address": "the value in the trusted position is not a valid address",
+    "not_public": (
+        "the address resolved is private, loopback or link-local: it is most likely one of your "
+        "own proxies, so every client behind it shares one bucket. Raise hops, or read the "
+        "header your edge sets"
+    ),
+    "forwarding_headers_ignored": (
+        "the TCP peer is read, but the request carries a forwarding header: a proxy is in "
+        "front, and the peer is that proxy, not the client"
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class IpWarning:
+    """`code` is stable and the same in every port. `message` is for a person to read."""
+
+    code: IpWarningCode
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClientIpReport:
+    """`ip` is what `resolve_client_ip` returns for the same arguments."""
+
+    ip: str | None
+    warnings: tuple[IpWarning, ...]
+
+
+def _is_not_public(ip: str) -> bool:
+    if ":" not in ip:
+        a, b = (int(part) for part in ip.split(".")[:2])
+        return (
+            a in (0, 10, 127)
+            or (a == 100 and 64 <= b <= 127)
+            or (a == 169 and b == 254)
+            or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 168)
+        )
+    value = int(ipaddress.IPv6Address(ip))
+    return value <= 1 or value >> 121 == 0xFC >> 1 or value >> 118 == 0xFE80 >> 6
+
+
+def _chain_warning(value: str | None, hops: int) -> IpWarningCode:
+    """Why a forwarding chain gave no address."""
+    if value is None:
+        return "source_missing"
+    return "chain_too_short" if len(value.split(",")) <= hops else "not_an_address"
+
+
+def explain_client_ip(
+    headers: Any,
+    peer: str | None = None,
+    *,
+    preset: IpPreset | None = None,
+    xff_hops: int | None = None,
+    forwarded_hops: int | None = None,
+    header: str | None = None,
+    use_peer: bool = False,
+) -> ClientIpReport:
+    """The address a strategy resolves, with what looks wrong about the configuration.
+
+    For a startup check, a test or a debug route: it never changes what `resolve_client_ip`
+    returns, and it has no place on the request path. See "Explaining a resolution" in the spec.
+    """
+    ip = resolve_client_ip(
+        headers,
+        peer,
+        preset=preset,
+        xff_hops=xff_hops,
+        forwarded_hops=forwarded_hops,
+        header=header,
+        use_peer=use_peer,
+    )
+    if preset is not None:
+        header, xff_hops = _PRESETS[preset]
+    reads_peer = header is None and xff_hops is None and forwarded_hops is None
+    codes: list[IpWarningCode] = []
+    if ip is None:
+        if xff_hops is not None:
+            codes.append(_chain_warning(_read_header(headers, "x-forwarded-for"), xff_hops))
+        elif forwarded_hops is not None:
+            codes.append(_chain_warning(_read_header(headers, "forwarded"), forwarded_hops))
+        elif header is not None:
+            missing = _read_header(headers, header.lower()) is None
+            codes.append("source_missing" if missing else "not_an_address")
+        else:
+            codes.append("not_an_address" if peer else "source_missing")
+    elif _is_not_public(ip):
+        codes.append("not_public")
+    if reads_peer and (
+        _read_header(headers, "x-forwarded-for") is not None
+        or _read_header(headers, "forwarded") is not None
+    ):
+        codes.append("forwarding_headers_ignored")
+    return ClientIpReport(ip, tuple(IpWarning(code, _WARNINGS[code]) for code in codes))

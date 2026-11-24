@@ -365,6 +365,18 @@ CORE = [
         "if False:",
     ),
     (
+        "explain: every 172.x address counts as private",
+        "ip.py",
+        "(a == 172 and 16 <= b <= 31)",
+        "a == 172",
+    ),
+    (
+        "explain: a proxy in front of the peer goes unnoticed",
+        "ip.py",
+        "    if reads_peer and (",
+        "    if False and (",
+    ),
+    (
         "Forwarded read from the left",
         "ip.py",
         'for raw in elements[len(elements) - 1 - hops].split(";"):',

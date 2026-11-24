@@ -8,7 +8,7 @@ import { deriveKey } from '../../src/core/key.js';
 import { createLimiter } from '../../src/core/limiter.js';
 import { cloudflareBindingStore } from '../../src/stores/cloudflare.js';
 import { problemDetails } from '../../src/adapters/shared.js';
-import { canonicalIp, maskIp, resolveClientIp, type IpStrategy } from '../../src/ip/index.js';
+import { canonicalIp, explainClientIp, maskIp, resolveClientIp, type IpStrategy } from '../../src/ip/index.js';
 import type { Store } from '../../src/core/types.js';
 import { allVectors, runConcurrency, runRecipe, runSequence, shadowedField, SPEC_DIR, toPolicy, vectorsOf, type Vector } from '../support/vectors.js';
 
@@ -65,6 +65,21 @@ describe('ip vectors', () => {
     expect(resolveClientIp({ headers: c.headers, peer: c.peer }, strategy)).toBe(c.expect);
     // A fetch `Headers` object must behave the same as a plain Node headers record.
     expect(resolveClientIp({ headers: new Headers(c.headers), peer: c.peer }, strategy)).toBe(c.expect);
+  });
+  it.each<[string, Vector]>(vector.explain.map((c: Vector) => [c.name, c]))('explain %s', (_name, c) => {
+    for (const headers of [c.headers, new Headers(c.headers)]) {
+      const report = explainClientIp({ headers, peer: c.peer }, c.strategy as IpStrategy);
+      expect({ ip: report.ip, warnings: report.warnings.map((warning) => warning.code) }).toEqual(c.expect);
+      expect(report.ip).toBe(resolveClientIp({ headers, peer: c.peer }, c.strategy as IpStrategy));
+      for (const warning of report.warnings) expect(warning.message.length).toBeGreaterThan(20);
+    }
+  });
+  it('explains a preset as the strategy it stands for', () => {
+    expect(explainClientIp({ headers: {}, peer: null }, { preset: 'cloudflare' }).warnings.map((w) => w.code)).toEqual(['source_missing']);
+    expect(explainClientIp({ headers: { 'x-forwarded-for': '10.0.0.1' }, peer: '10.0.0.2' }, { preset: 'direct' }).warnings.map((w) => w.code)).toEqual([
+      'not_public',
+      'forwarding_headers_ignored',
+    ]);
   });
   it.each<[string, Vector]>(vector.masks.map((m: Vector) => [`${m.ip}/${m.prefix}`, m]))('mask %s', (_name, m) => {
     expect(maskIp(m.ip, m.prefix)).toBe(m.expect);

@@ -7,7 +7,8 @@ behaviour across ports, verified by vectors from the independent generator.
 
 | Version | Contents |
 |---|---|
-| Next release | Shadow mode: decide and count, report through `onEvent`, but never deny |
+| Next release | The `Forwarded` header as a client IP strategy, problem details responses, and `explainClientIp` |
+| 0.5 | Shadow mode: decide and count, report through `onEvent`, but never deny |
 | 0.4 | `reserve` and `refund`, combined checks in two phases, lockouts over several limits |
 | 0.3 | See [done in 0.3](#done-in-03) |
 | 0.2 | `peek` and `reset`, and `onDenied` in every adapter |
@@ -25,6 +26,7 @@ Items that came up while the library was being adopted in applications, in rough
 | Server action helper for Next.js | A server action has no `Request` to pass to `checkRateLimit` | A helper that reads `headers()` and returns the decision |
 | More client IP presets | Each platform documents its own trusted header | Presets added only with a published statement from the platform that the header cannot be forged |
 | A newer rate limit headers draft | `draft-11` is pinned to one revision of the IETF document | A new profile next to it, never a silent change of the existing one |
+| Warnings at startup | `explainClientIp` finds a wrong client IP strategy, but only when asked. Other mistakes, such as ioredis resending commands, are only in the docs | A check of the whole configuration, run once, with the same kind of codes. It needs a decision on whether a library may log by itself |
 
 ## Later
 
@@ -36,6 +38,7 @@ Larger pieces, or ones that need a decision first.
 | Metrics | Dashboards without writing an `onEvent` hook | OpenTelemetry counters for allowed, limited, store error and latency |
 | Durable Object placement | Lower latency, data residency | `locationHint` and jurisdiction options for `durableObjectStore` |
 | Refunds that are safe to send twice | A client that resends a command after a reconnect applies a refund twice. Today that is avoided in the client's configuration | The store remembers which reservations it gave back, which needs a new state format |
+| Conformance kit | A store or a port written by someone else cannot run the vectors without copying the test code | The runners published as a package, so that a third party can claim a tier |
 | Penalties | Repeat offenders wait longer | Escalating windows on top of peek and reset, if it can be specified without floats |
 | SQLite-compatible stores | Edge databases and single-file deployments have no Redis or Postgres | The hit as one atomic statement, if the engine can give the guarantees of the `exact` tier |
 | MySQL store | Some applications have only MySQL | The Postgres functions rewritten, with their own conformance run |

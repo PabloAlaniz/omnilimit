@@ -63,6 +63,10 @@ def strategy_kwargs(strategy: dict[str, Any]) -> dict[str, Any]:
         return {"preset": strategy["preset"]}
     if "forwarded" in strategy:
         return {"forwarded_hops": strategy["forwarded"]["hops"]}
+    if "header" in strategy:
+        return {"header": strategy["header"]}
+    if "peer" in strategy:
+        return {"use_peer": True}
     return {"xff_hops": strategy["xff"]["hops"]}
 
 

@@ -979,5 +979,989 @@
    "prefix": 64,
    "expect": "203.0.113.7"
   }
+ ],
+ "explain": [
+  {
+   "name": "a-public-address-has-no-warning",
+   "headers": {
+    "x-forwarded-for": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "203.0.113.7",
+    "warnings": []
+   }
+  },
+  {
+   "name": "no-header-is-source-missing",
+   "headers": {},
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "source_missing"
+    ]
+   }
+  },
+  {
+   "name": "too-few-entries-is-chain-too-short",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 1
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "chain_too_short"
+    ]
+   }
+  },
+  {
+   "name": "junk-in-the-trusted-position-is-not-an-address",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7, junk"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "not_an_address"
+    ]
+   }
+  },
+  {
+   "name": "an-empty-header-is-not-an-address",
+   "headers": {
+    "x-forwarded-for": ""
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "not_an_address"
+    ]
+   }
+  },
+  {
+   "name": "a-private-address-is-not-public",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7, 10.1.2.3"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "10.1.2.3",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-0.1.2.3",
+   "headers": {
+    "x-forwarded-for": "0.1.2.3"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "0.1.2.3",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-10.255.255.255",
+   "headers": {
+    "x-forwarded-for": "10.255.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "10.255.255.255",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-100.64.0.1",
+   "headers": {
+    "x-forwarded-for": "100.64.0.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "100.64.0.1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-100.127.255.255",
+   "headers": {
+    "x-forwarded-for": "100.127.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "100.127.255.255",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-127.0.0.1",
+   "headers": {
+    "x-forwarded-for": "127.0.0.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "127.0.0.1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-169.254.169.254",
+   "headers": {
+    "x-forwarded-for": "169.254.169.254"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "169.254.169.254",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-172.16.0.1",
+   "headers": {
+    "x-forwarded-for": "172.16.0.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "172.16.0.1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-172.31.255.255",
+   "headers": {
+    "x-forwarded-for": "172.31.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "172.31.255.255",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-192.168.1.1",
+   "headers": {
+    "x-forwarded-for": "192.168.1.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "192.168.1.1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-::1",
+   "headers": {
+    "x-forwarded-for": "::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "::1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-::",
+   "headers": {
+    "x-forwarded-for": "::"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "::",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-fc00::1",
+   "headers": {
+    "x-forwarded-for": "fc00::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fc00::1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-fdff::1",
+   "headers": {
+    "x-forwarded-for": "fdff::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fdff::1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-fe80::1",
+   "headers": {
+    "x-forwarded-for": "fe80::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fe80::1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-febf::1",
+   "headers": {
+    "x-forwarded-for": "febf::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "febf::1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "not-public-::ffff:10.0.0.1",
+   "headers": {
+    "x-forwarded-for": "::ffff:10.0.0.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "10.0.0.1",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "public-1.1.1.1",
+   "headers": {
+    "x-forwarded-for": "1.1.1.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "1.1.1.1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-9.255.255.255",
+   "headers": {
+    "x-forwarded-for": "9.255.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "9.255.255.255",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-11.0.0.0",
+   "headers": {
+    "x-forwarded-for": "11.0.0.0"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "11.0.0.0",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-100.63.255.255",
+   "headers": {
+    "x-forwarded-for": "100.63.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "100.63.255.255",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-100.128.0.0",
+   "headers": {
+    "x-forwarded-for": "100.128.0.0"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "100.128.0.0",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-126.255.255.255",
+   "headers": {
+    "x-forwarded-for": "126.255.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "126.255.255.255",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-128.0.0.0",
+   "headers": {
+    "x-forwarded-for": "128.0.0.0"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "128.0.0.0",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-169.253.0.1",
+   "headers": {
+    "x-forwarded-for": "169.253.0.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "169.253.0.1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-169.255.0.1",
+   "headers": {
+    "x-forwarded-for": "169.255.0.1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "169.255.0.1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-172.15.255.255",
+   "headers": {
+    "x-forwarded-for": "172.15.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "172.15.255.255",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-172.32.0.0",
+   "headers": {
+    "x-forwarded-for": "172.32.0.0"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "172.32.0.0",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-192.167.255.255",
+   "headers": {
+    "x-forwarded-for": "192.167.255.255"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "192.167.255.255",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-192.169.0.0",
+   "headers": {
+    "x-forwarded-for": "192.169.0.0"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "192.169.0.0",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-2001:db8::1",
+   "headers": {
+    "x-forwarded-for": "2001:db8::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "2001:db8::1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-fbff::1",
+   "headers": {
+    "x-forwarded-for": "fbff::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fbff::1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-fe00::1",
+   "headers": {
+    "x-forwarded-for": "fe00::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fe00::1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-fe7f::1",
+   "headers": {
+    "x-forwarded-for": "fe7f::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fe7f::1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-fec0::1",
+   "headers": {
+    "x-forwarded-for": "fec0::1"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fec0::1",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-::2",
+   "headers": {
+    "x-forwarded-for": "::2"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "::2",
+    "warnings": []
+   }
+  },
+  {
+   "name": "public-::ffff:8.8.8.8",
+   "headers": {
+    "x-forwarded-for": "::ffff:8.8.8.8"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "8.8.8.8",
+    "warnings": []
+   }
+  },
+  {
+   "name": "forwarded-public",
+   "headers": {
+    "forwarded": "for=6.6.6.6, for=203.0.113.7"
+   },
+   "peer": null,
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "203.0.113.7",
+    "warnings": []
+   }
+  },
+  {
+   "name": "forwarded-missing",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7"
+   },
+   "peer": null,
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "source_missing"
+    ]
+   }
+  },
+  {
+   "name": "forwarded-too-short",
+   "headers": {
+    "forwarded": "for=203.0.113.7"
+   },
+   "peer": null,
+   "strategy": {
+    "forwarded": {
+     "hops": 2
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "chain_too_short"
+    ]
+   }
+  },
+  {
+   "name": "forwarded-without-for-is-not-an-address",
+   "headers": {
+    "forwarded": "proto=https"
+   },
+   "peer": null,
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "not_an_address"
+    ]
+   }
+  },
+  {
+   "name": "forwarded-unknown-is-not-an-address",
+   "headers": {
+    "forwarded": "for=unknown"
+   },
+   "peer": null,
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "not_an_address"
+    ]
+   }
+  },
+  {
+   "name": "forwarded-private",
+   "headers": {
+    "forwarded": "for=\"[fd00::7]:443\""
+   },
+   "peer": null,
+   "strategy": {
+    "forwarded": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "fd00::7",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "header-public",
+   "headers": {
+    "x-real-ip": " 203.0.113.7 "
+   },
+   "peer": null,
+   "strategy": {
+    "header": "x-real-ip"
+   },
+   "expect": {
+    "ip": "203.0.113.7",
+    "warnings": []
+   }
+  },
+  {
+   "name": "header-missing",
+   "headers": {},
+   "peer": null,
+   "strategy": {
+    "header": "x-real-ip"
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "source_missing"
+    ]
+   }
+  },
+  {
+   "name": "header-with-a-list-is-not-an-address",
+   "headers": {
+    "x-real-ip": "6.6.6.6, 203.0.113.7"
+   },
+   "peer": null,
+   "strategy": {
+    "header": "x-real-ip"
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "not_an_address"
+    ]
+   }
+  },
+  {
+   "name": "header-private",
+   "headers": {
+    "x-real-ip": "192.168.0.9"
+   },
+   "peer": null,
+   "strategy": {
+    "header": "x-real-ip"
+   },
+   "expect": {
+    "ip": "192.168.0.9",
+    "warnings": [
+     "not_public"
+    ]
+   }
+  },
+  {
+   "name": "peer-public",
+   "headers": {},
+   "peer": "203.0.113.7",
+   "strategy": {
+    "peer": true
+   },
+   "expect": {
+    "ip": "203.0.113.7",
+    "warnings": []
+   }
+  },
+  {
+   "name": "peer-missing",
+   "headers": {},
+   "peer": null,
+   "strategy": {
+    "peer": true
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "source_missing"
+    ]
+   }
+  },
+  {
+   "name": "peer-empty",
+   "headers": {},
+   "peer": "",
+   "strategy": {
+    "peer": true
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "source_missing"
+    ]
+   }
+  },
+  {
+   "name": "peer-junk",
+   "headers": {},
+   "peer": "unix:/tmp/sock",
+   "strategy": {
+    "peer": true
+   },
+   "expect": {
+    "ip": null,
+    "warnings": [
+     "not_an_address"
+    ]
+   }
+  },
+  {
+   "name": "peer-private-behind-a-proxy",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7"
+   },
+   "peer": "10.0.0.1",
+   "strategy": {
+    "peer": true
+   },
+   "expect": {
+    "ip": "10.0.0.1",
+    "warnings": [
+     "not_public",
+     "forwarding_headers_ignored"
+    ]
+   }
+  },
+  {
+   "name": "peer-public-with-forwarded",
+   "headers": {
+    "forwarded": "for=203.0.113.7"
+   },
+   "peer": "198.51.100.2",
+   "strategy": {
+    "peer": true
+   },
+   "expect": {
+    "ip": "198.51.100.2",
+    "warnings": [
+     "forwarding_headers_ignored"
+    ]
+   }
+  },
+  {
+   "name": "xff-strategy-does-not-mind-other-headers",
+   "headers": {
+    "x-forwarded-for": "203.0.113.7",
+    "forwarded": "for=6.6.6.6"
+   },
+   "peer": null,
+   "strategy": {
+    "xff": {
+     "hops": 0
+    }
+   },
+   "expect": {
+    "ip": "203.0.113.7",
+    "warnings": []
+   }
+  }
  ]
 }

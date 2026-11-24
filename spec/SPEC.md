@@ -475,6 +475,27 @@ true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
 
 Verify these against your deployment. A preset cannot detect a topology it does not match.
 
+### Explaining a resolution
+
+A port can report, next to the address a strategy resolves, what looks wrong with the
+configuration. It is for a startup check, a test or a debug route, never for the request path:
+the address is the one the strategy gives, and a warning changes nothing.
+
+| Warning | When |
+|---|---|
+| `source_missing` | The header the strategy reads is absent, or there is no peer address |
+| `chain_too_short` | The `X-Forwarded-For` or `Forwarded` chain has `hops` entries or fewer |
+| `not_an_address` | The value in the chosen position is not a valid address |
+| `not_public` | The address resolved is in one of the ranges below: it is most likely a proxy of your own, and every client behind it would share one bucket |
+| `forwarding_headers_ignored` | The strategy reads the TCP peer, and the request carries `X-Forwarded-For` or `Forwarded`: a proxy is in front, and the peer is that proxy |
+
+- A resolution that gives `null` has exactly one of the first three, in that order of
+  precedence. One that gives an address has `not_public` or nothing.
+- `forwarding_headers_ignored` is independent of the others and comes last.
+- Not public: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`,
+  `172.16.0.0/12`, `192.168.0.0/16`, `::`, `::1`, `fc00::/7` and `fe80::/10`. An IPv4-mapped
+  address is judged as the IPv4 address it becomes.
+
 ## Headers
 
 Profiles are versioned because the IETF document is still an Internet-Draft.
@@ -519,7 +540,7 @@ same status and headers:
 |---|---|
 | `sequence` | Decisions, public values, headers and raw state, step by step |
 | `key` | Key derivation |
-| `ip` | Client IP strategies, canonical form and masking |
+| `ip` | Client IP strategies, canonical form, masking, and the warnings of an explained resolution |
 | `failure` | Each fault with each failure mode, and a refund that fails |
 | `concurrency` | 200 simultaneous hits allow exactly `burst`; recipes run by many callers at once keep their bounds |
 | `contract` | Policy, scope and cost validation, the policy shorthand, the approximate decision shape, and the problem details body |

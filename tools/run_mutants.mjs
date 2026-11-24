@@ -19,6 +19,8 @@ const core = [
   ['short chain falls back to first value', 'ts/src/ip/index.ts', 'if (entries.length <= hops) return null;', 'if (entries.length <= hops) return canonicalIp(entries[0]);'],
   ['IPv4-mapped not normalised', 'ts/src/ip/index.ts', 'if (isMapped) {', 'if (false) {'],
   ['problem details: retry_after left out', 'ts/src/adapters/shared.ts', 'if (retryAfter !== undefined) body.retry_after = Number(retryAfter);', ''],
+  ['explain: every 172.x address counts as private', 'ts/src/ip/index.ts', '(a === 172 && b >= 16 && b <= 31)', 'a === 172'],
+  ['explain: a proxy in front of the peer goes unnoticed', 'ts/src/ip/index.ts', "if ('peer' in resolved && (readHeader", "if (false && (readHeader"],
   ['Forwarded read from the left', 'ts/src/ip/index.ts', "for (const raw of (elements[elements.length - 1 - hops] as string).split(';')) {", "for (const raw of (elements[0] as string).split(';')) {"],
   ['Forwarded: a second for in the element is accepted', 'ts/src/ip/index.ts', 'if (node !== null) return null;\n    node = pair.slice(equals + 1);', 'node = pair.slice(equals + 1);'],
   ['Forwarded: an IPv6 address without brackets is accepted', 'ts/src/ip/index.ts', "return PORT.test(node.slice(colon + 1)) ? canonicalIp(node.slice(0, colon)) : null;", "return PORT.test(node.slice(colon + 1)) ? canonicalIp(node.slice(0, colon)) : canonicalIp(node);"],

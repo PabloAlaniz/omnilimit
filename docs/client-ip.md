@@ -50,6 +50,35 @@ Elements are split on every comma, even inside a quoted string. A client that op
 
 Use the header your proxies append to, not both: a proxy that only appends to one leaves the other entirely to the client.
 
+## Check your configuration
+
+The two usual mistakes are silent. With one hop too few, the address you read is your own load balancer's, and every client shares one bucket. With the TCP peer read behind a proxy, the same happens. `explainClientIp` resolves an address as `resolveClientIp` does and says what looks wrong:
+
+```ts
+import { explainClientIp } from 'omnilimit/ip';
+
+const { ip, warnings } = explainClientIp({ headers: req.headers, peer: req.socket.remoteAddress }, { xff: { hops: 0 } });
+for (const warning of warnings) log.warn(`client ip ${ip}: ${warning.code}: ${warning.message}`);
+```
+
+```python
+from omnilimit.ip import explain_client_ip
+
+report = explain_client_ip(request.headers, peer, xff_hops=0)
+```
+
+Use it in a test, at startup with a request of your own, or behind a debug route. It does not belong on the request path, and it never changes the address.
+
+| Code | What it means | What to do |
+|---|---|---|
+| `source_missing` | The header the strategy reads is absent, or there is no peer | The request did not come through the proxy you configured for. Check that the origin cannot be reached around it |
+| `chain_too_short` | The chain has `hops` entries or fewer | `hops` is higher than the number of your proxies that append |
+| `not_an_address` | The value in the trusted position is not an address | Find out what writes that header |
+| `not_public` | The address is private, loopback or link-local | It is most likely one of your own proxies. Raise `hops`, or read the header your edge sets |
+| `forwarding_headers_ignored` | The TCP peer is read, and the request carries `X-Forwarded-For` or `Forwarded` | A proxy is in front, and the peer is that proxy. Choose a strategy that reads what it sends |
+
+The codes are the same in every port and part of the [spec](https://github.com/PabloAlaniz/omnilimit/blob/main/spec/SPEC.md#explaining-a-resolution). A warning is a hint, not a verdict: a client inside your own network has a private address and nothing is wrong.
+
 ## When there is no IP
 
 Adapters require `onMissingKey`, because a `null` usually means the proxy configuration changed:

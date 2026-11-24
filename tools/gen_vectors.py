@@ -564,6 +564,46 @@ def from_forwarded(value: str | None, hops: int) -> str | None:
     return canonical(host)
 
 
+NOT_PUBLIC = [
+    ipaddress.ip_network(n)
+    for n in ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "::/128", "::1/128", "fc00::/7", "fe80::/10")
+]
+
+
+def explain(headers: dict, peer: str | None, strategy: dict) -> dict:
+    """The address a strategy resolves, and what looks wrong with the configuration."""
+    warnings = []
+    if "xff" in strategy or "forwarded" in strategy:
+        name, read = ("x-forwarded-for", from_xff) if "xff" in strategy else ("forwarded", from_forwarded)
+        hops = strategy[name.replace("x-forwarded-for", "xff")]["hops"]
+        value = headers.get(name)
+        ip = read(value, hops)
+        if value is None:
+            warnings.append("source_missing")
+        elif len(value.split(",")) <= hops:
+            warnings.append("chain_too_short")
+        elif ip is None:
+            warnings.append("not_an_address")
+    elif "header" in strategy:
+        value = headers.get(strategy["header"])
+        ip = canonical(None if value is None else value.strip(" \t"))
+        if value is None:
+            warnings.append("source_missing")
+        elif ip is None:
+            warnings.append("not_an_address")
+    else:
+        ip = canonical(peer)
+        if not peer:
+            warnings.append("source_missing")
+        elif ip is None:
+            warnings.append("not_an_address")
+    if ip is not None and any(ipaddress.ip_address(ip) in network for network in NOT_PUBLIC if network.version == ipaddress.ip_address(ip).version):
+        warnings.append("not_public")
+    if "peer" in strategy and ("x-forwarded-for" in headers or "forwarded" in headers):
+        warnings.append("forwarding_headers_ignored")
+    return {"ip": ip, "warnings": warnings}
+
+
 def masked(ip: str | None, prefix: int) -> str | None:
     if ip is None:
         return None
@@ -688,6 +728,43 @@ def ips() -> dict[str, dict]:
     ]:
         cases.append({"name": name, "headers": headers_, "peer": peer, "strategy": {"preset": preset}, "expect": expect})
 
+    explained = []
+
+    def exp(name, headers_, peer, strategy):
+        explained.append({"name": name, "headers": headers_, "peer": peer, "strategy": strategy, "expect": explain(headers_, peer, strategy)})
+
+    x = lambda hops: {"xff": {"hops": hops}}  # noqa: E731
+    f = lambda hops: {"forwarded": {"hops": hops}}  # noqa: E731
+    exp("a-public-address-has-no-warning", {"x-forwarded-for": f"{spoof}, {client}"}, "10.0.0.1", x(0))
+    exp("no-header-is-source-missing", {}, "10.0.0.1", x(0))
+    exp("too-few-entries-is-chain-too-short", {"x-forwarded-for": client}, "10.0.0.1", x(1))
+    exp("junk-in-the-trusted-position-is-not-an-address", {"x-forwarded-for": f"{client}, junk"}, "10.0.0.1", x(0))
+    exp("an-empty-header-is-not-an-address", {"x-forwarded-for": ""}, "10.0.0.1", x(0))
+    # The usual mistake: one hop too few, so the address is the load balancer's own.
+    exp("a-private-address-is-not-public", {"x-forwarded-for": f"{client}, 10.1.2.3"}, "10.0.0.1", x(0))
+    for private in ("0.1.2.3", "10.255.255.255", "100.64.0.1", "100.127.255.255", "127.0.0.1", "169.254.169.254", "172.16.0.1", "172.31.255.255", "192.168.1.1", "::1", "::", "fc00::1", "fdff::1", "fe80::1", "febf::1", "::ffff:10.0.0.1"):
+        exp(f"not-public-{private}", {"x-forwarded-for": private}, None, x(0))
+    for public in ("1.1.1.1", "9.255.255.255", "11.0.0.0", "100.63.255.255", "100.128.0.0", "126.255.255.255", "128.0.0.0", "169.253.0.1", "169.255.0.1", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.0", "2001:db8::1", "fbff::1", "fe00::1", "fe7f::1", "fec0::1", "::2", "::ffff:8.8.8.8"):
+        exp(f"public-{public}", {"x-forwarded-for": public}, None, x(0))
+    exp("forwarded-public", {"forwarded": f"for={spoof}, for={client}"}, None, f(0))
+    exp("forwarded-missing", {"x-forwarded-for": client}, None, f(0))
+    exp("forwarded-too-short", {"forwarded": f"for={client}"}, None, f(2))
+    exp("forwarded-without-for-is-not-an-address", {"forwarded": "proto=https"}, None, f(0))
+    exp("forwarded-unknown-is-not-an-address", {"forwarded": "for=unknown"}, None, f(0))
+    exp("forwarded-private", {"forwarded": 'for="[fd00::7]:443"'}, None, f(0))
+    exp("header-public", {"x-real-ip": f" {client} "}, None, {"header": "x-real-ip"})
+    exp("header-missing", {}, None, {"header": "x-real-ip"})
+    exp("header-with-a-list-is-not-an-address", {"x-real-ip": f"{spoof}, {client}"}, None, {"header": "x-real-ip"})
+    exp("header-private", {"x-real-ip": "192.168.0.9"}, None, {"header": "x-real-ip"})
+    exp("peer-public", {}, client, {"peer": True})
+    exp("peer-missing", {}, None, {"peer": True})
+    exp("peer-empty", {}, "", {"peer": True})
+    exp("peer-junk", {}, "unix:/tmp/sock", {"peer": True})
+    # The other usual mistake: the peer is read, and the peer is a proxy.
+    exp("peer-private-behind-a-proxy", {"x-forwarded-for": client}, "10.0.0.1", {"peer": True})
+    exp("peer-public-with-forwarded", {"forwarded": f"for={client}"}, lb, {"peer": True})
+    exp("xff-strategy-does-not-mind-other-headers", {"x-forwarded-for": client, "forwarded": f"for={spoof}"}, None, x(0))
+
     masks = []
     for ip, prefix in [
         ("2001:db8:1:2:3:4:5:6", 64),
@@ -697,7 +774,7 @@ def ips() -> dict[str, dict]:
         ("203.0.113.7", 64),
     ]:
         masks.append({"ip": ip, "prefix": prefix, "expect": masked(ip, prefix)})
-    return {"ip/strategies": {"spec": SPEC, "id": "ip/strategies", "kind": "ip", "cases": cases, "masks": masks}}
+    return {"ip/strategies": {"spec": SPEC, "id": "ip/strategies", "kind": "ip", "cases": cases, "masks": masks, "explain": explained}}
 
 
 def failures() -> dict[str, dict]:

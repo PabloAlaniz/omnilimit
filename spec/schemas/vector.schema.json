@@ -90,6 +90,32 @@
       "then": {
         "required": ["cases", "masks"],
         "properties": {
+          "explain": {
+            "type": "array",
+            "description": "A resolution with its warnings. See 'Explaining a resolution' in the spec.",
+            "items": {
+              "type": "object",
+              "required": ["name", "headers", "peer", "strategy", "expect"],
+              "properties": {
+                "name": { "type": "string" },
+                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                "peer": { "type": ["string", "null"] },
+                "strategy": { "type": "object" },
+                "expect": {
+                  "type": "object",
+                  "required": ["ip", "warnings"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "ip": { "type": ["string", "null"] },
+                    "warnings": {
+                      "type": "array",
+                      "items": { "enum": ["source_missing", "chain_too_short", "not_an_address", "not_public", "forwarding_headers_ignored"] }
+                    }
+                  }
+                }
+              }
+            }
+          },
           "cases": {
             "type": "array",
             "minItems": 1,

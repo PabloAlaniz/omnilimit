@@ -245,3 +245,75 @@ export function resolveClientIp(input: IpInput, strategy: IpStrategy): string | 
   }
   return canonicalIp(input.peer);
 }
+
+export type IpWarningCode = 'source_missing' | 'chain_too_short' | 'not_an_address' | 'not_public' | 'forwarding_headers_ignored';
+
+export interface IpWarning {
+  /** Stable, and the same in every port: see "Explaining a resolution" in the spec. */
+  code: IpWarningCode;
+  /** For a person to read. The wording may change between releases. */
+  message: string;
+}
+
+export interface ClientIpReport {
+  /** What `resolveClientIp` returns for the same input and strategy. */
+  ip: string | null;
+  warnings: IpWarning[];
+}
+
+const WARNINGS: Record<IpWarningCode, string> = {
+  source_missing: 'the header or peer address this strategy reads is absent: the request did not come through the proxy you configured for',
+  chain_too_short: 'the forwarding chain has no entry at this hop count: hops is higher than the number of proxies that append to it',
+  not_an_address: 'the value in the trusted position is not a valid address',
+  not_public:
+    'the address resolved is private, loopback or link-local: it is most likely one of your own proxies, so every client behind it shares one bucket. Raise hops, or read the header your edge sets',
+  forwarding_headers_ignored:
+    'the TCP peer is read, but the request carries a forwarding header: a proxy is in front, and the peer is that proxy, not the client',
+};
+
+function isNotPublic(ip: string): boolean {
+  if (!ip.includes(':')) {
+    const [a, b] = ip.split('.').map(Number) as [number, number];
+    return (
+      a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+    );
+  }
+  const groups = parseIpv6(ip) as number[];
+  const first = groups[0] as number;
+  const unspecifiedOrLoopback = groups.slice(0, 7).every((group) => group === 0) && (groups[7] as number) <= 1;
+  return unspecifiedOrLoopback || (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+}
+
+/**
+ * The address a strategy resolves, with what looks wrong about the configuration. For a startup
+ * check, a test or a debug route: it never changes what `resolveClientIp` returns, and it has
+ * no place on the request path.
+ *
+ * ```ts
+ * const { ip, warnings } = explainClientIp({ headers: req.headers, peer }, { xff: { hops: 1 } });
+ * for (const warning of warnings) log.warn(`client ip: ${warning.code}: ${warning.message}`);
+ * ```
+ */
+export function explainClientIp(input: IpInput, strategy: IpStrategy): ClientIpReport {
+  const ip = resolveClientIp(input, strategy);
+  const resolved = 'preset' in strategy ? PRESETS[strategy.preset] : strategy;
+  const codes: IpWarningCode[] = [];
+  if (ip === null) {
+    if ('xff' in resolved || 'forwarded' in resolved) {
+      const [name, hops] = 'xff' in resolved ? ['x-forwarded-for', resolved.xff.hops] : ['forwarded', resolved.forwarded.hops];
+      const value = readHeader(input.headers, name as string);
+      if (value === null) codes.push('source_missing');
+      else codes.push(value.split(',').length <= (hops as number) ? 'chain_too_short' : 'not_an_address');
+    } else if ('header' in resolved) {
+      codes.push(readHeader(input.headers, resolved.header.toLowerCase()) === null ? 'source_missing' : 'not_an_address');
+    } else {
+      codes.push(input.peer ? 'not_an_address' : 'source_missing');
+    }
+  } else if (isNotPublic(ip)) {
+    codes.push('not_public');
+  }
+  if ('peer' in resolved && (readHeader(input.headers, 'x-forwarded-for') !== null || readHeader(input.headers, 'forwarded') !== null)) {
+    codes.push('forwarding_headers_ignored');
+  }
+  return { ip, warnings: codes.map((code) => ({ code, message: WARNINGS[code] })) };
+}
