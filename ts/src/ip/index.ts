@@ -154,9 +154,21 @@ export function clientKey(input: IpInput, options: IpStrategy & { ipv6Prefix?: n
   return ip === null ? null : maskIp(ip, ipv6Prefix);
 }
 
+/**
+ * Remove the optional whitespace of HTTP, spaces and tabs (RFC 9110). `String.prototype.trim`
+ * removes more, and not the same characters as other languages do, so ports would disagree.
+ */
+function trimOws(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && (value[start] === ' ' || value[start] === '\t')) start += 1;
+  while (end > start && (value[end - 1] === ' ' || value[end - 1] === '\t')) end -= 1;
+  return value.slice(start, end);
+}
+
 function fromXff(value: string | null, hops: number): string | null {
   if (value === null) return null;
-  const entries = value.split(',').map((entry) => entry.trim());
+  const entries = value.split(',').map(trimOws);
   // The client controls everything to the left of what your proxies appended, so a chain
   // that is too short must never fall back to its first value.
   if (entries.length <= hops) return null;
@@ -175,6 +187,9 @@ export function resolveClientIp(input: IpInput, strategy: IpStrategy): string | 
     if (!Number.isSafeInteger(hops) || hops < 0) throw new RangeError('omnilimit: hops must be a non-negative integer');
     return fromXff(readHeader(input.headers, 'x-forwarded-for'), hops);
   }
-  if ('header' in resolved) return canonicalIp(readHeader(input.headers, resolved.header.toLowerCase())?.trim());
+  if ('header' in resolved) {
+    const value = readHeader(input.headers, resolved.header.toLowerCase());
+    return canonicalIp(value === null ? null : trimOws(value));
+  }
   return canonicalIp(input.peer);
 }

@@ -9,6 +9,8 @@ const ip = resolveClientIp({ headers, peer }, strategy);
 
 `headers` is a `Headers` object or a Node headers record. The function returns `null` when the configured source is missing or malformed, and never falls back to something less trustworthy.
 
+Around an address, only spaces and tabs are trimmed, as HTTP defines optional whitespace. A no-break space or any other character next to it makes the value invalid, in every port.
+
 ## Choosing a strategy
 
 Count the proxies you control between the internet and your app.

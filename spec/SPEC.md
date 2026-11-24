@@ -439,6 +439,8 @@ true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
 ## Client IP
 
 - `xff` with `hops`: split on commas, trim, take the entry `hops` positions from the right.
+- Trimming removes spaces and tabs only, the optional whitespace of RFC 9110, from an entry of
+  the chain and from a single-IP header. Any other character makes the value invalid.
   Anything to the left of what your own proxies appended is client controlled.
 - A chain with `hops` entries or fewer gives `null`. It never falls back to the first value.
 - An invalid value in the chosen position gives `null`.
