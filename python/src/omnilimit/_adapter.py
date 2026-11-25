@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from omnilimit._types import Decision
 
@@ -23,6 +24,41 @@ class Denial:
     headers: dict[str, str]
     error: DenialError
     decision: Decision | None
+
+
+PROBLEM_JSON = "application/problem+json"
+"""The media type of a problem details body."""
+
+_PROBLEM_TITLES = {400: "Bad Request", 429: "Too Many Requests", 503: "Service Unavailable"}
+_PROBLEM_DETAILS: dict[str, str] = {
+    "rate_limited": "Rate limit exceeded.",
+    "rate_limiter_unavailable": "The rate limiter is unavailable.",
+    "client_not_identified": "The client could not be identified.",
+}
+
+
+def problem_details(denial: Denial) -> dict[str, Any]:
+    """A denial as a problem details object (RFC 9457). Send it as `application/problem+json`.
+
+    `error` is the code to act on, the same one the default body carries. `retry_after` is the
+    number of the `Retry-After` header, when there is one. The members and their order are part
+    of the spec.
+    """
+    body: dict[str, Any] = {
+        "type": "about:blank",
+        "title": _PROBLEM_TITLES.get(denial.status, "Error"),
+        "status": denial.status,
+        "detail": _PROBLEM_DETAILS[denial.error],
+        "error": denial.error,
+    }
+    if "retry-after" in denial.headers:
+        body["retry_after"] = int(denial.headers["retry-after"])
+    return body
+
+
+def problem_body(denial: Denial) -> bytes:
+    """`problem_details` as the bytes to send: no whitespace, the same in every port."""
+    return json.dumps(problem_details(denial), separators=(",", ":")).encode()
 
 
 def check_policy(on_missing_key: object) -> None:

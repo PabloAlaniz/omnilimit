@@ -30,7 +30,7 @@ The library has no network listener, no configuration file and no runtime depend
 
 | # | Threat | Defence | What remains |
 |---|---|---|---|
-| 1 | Rotating `X-Forwarded-For` to get a fresh bucket each time | The chain is read from the right, at a fixed hop count. A short chain or an invalid value gives `null`, never the first value | A preset that does not match the deployment. No library can detect that: see [client IP](client-ip.md) |
+| 1 | Rotating `X-Forwarded-For` to get a fresh bucket each time | The chain is read from the right, at a fixed hop count. A short chain or an invalid value gives `null`, never the first value | A preset that does not match the deployment. `explainClientIp` reports the usual signs of one, when asked: see [client IP](client-ip.md#check-your-configuration) |
 | 2 | Reaching the origin around the proxy, with a forged single-IP header | Documented as the condition of every preset | Restricting the origin is yours to do |
 | 3 | Rotating addresses inside one IPv6 allocation | Key helpers group by `/64` | Clients holding a larger prefix. Widen `ipv6Prefix` if you see it |
 | 4 | Dropping the identity so that no key is built | `onMissingKey` is required, and `shared` keeps those requests under one limit | `skip` removes the limit for them, by your choice |

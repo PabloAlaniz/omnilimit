@@ -14,6 +14,8 @@ export type IpStrategy =
   | { preset: IpPreset }
   /** Read `X-Forwarded-For` from the right, skipping `hops` entries added by your own proxies. */
   | { xff: { hops: number } }
+  /** Read the standard `Forwarded` header (RFC 7239) from the right, with the same hop count rule. */
+  | { forwarded: { hops: number } }
   /** A single-IP header that your edge overwrites. Anyone reaching your origin directly can forge it. */
   | { header: string }
   /** The TCP peer address. */
@@ -175,6 +177,53 @@ function fromXff(value: string | null, hops: number): string | null {
   return canonicalIp(entries[entries.length - 1 - hops]);
 }
 
+const PORT = /^[0-9]{1,5}$/;
+
+/** The address of a `for` value of RFC 7239: IPv4 or bracketed IPv6, with an optional port. */
+function forwardedNode(value: string): string | null {
+  let node = value;
+  if (node.startsWith('"')) {
+    if (node.length < 2 || !node.endsWith('"')) return null;
+    node = node.slice(1, -1);
+    if (node.includes('"') || node.includes('\\')) return null;
+  }
+  if (node.startsWith('[')) {
+    const end = node.indexOf(']');
+    if (end === -1) return null;
+    const host = node.slice(1, end);
+    const rest = node.slice(end + 1);
+    if (!host.includes(':')) return null;
+    if (rest !== '' && !(rest.startsWith(':') && PORT.test(rest.slice(1)))) return null;
+    return canonicalIp(host);
+  }
+  const colon = node.indexOf(':');
+  if (colon === -1) return canonicalIp(node);
+  return PORT.test(node.slice(colon + 1)) ? canonicalIp(node.slice(0, colon)) : null;
+}
+
+function fromForwarded(value: string | null, hops: number): string | null {
+  if (value === null) return null;
+  // Every comma, even inside a quoted string: a quote the client opened must not be able to
+  // swallow the element your proxy appended. No address contains a comma or a semicolon.
+  const elements = value.split(',');
+  if (elements.length <= hops) return null;
+  let node: string | null = null;
+  for (const raw of (elements[elements.length - 1 - hops] as string).split(';')) {
+    const pair = trimOws(raw);
+    if (pair === '') continue;
+    const equals = pair.indexOf('=');
+    if (equals === -1) return null;
+    if (pair.slice(0, equals).toLowerCase() !== 'for') continue;
+    if (node !== null) return null;
+    node = pair.slice(equals + 1);
+  }
+  return node === null ? null : forwardedNode(node);
+}
+
+const assertHops = (hops: unknown): void => {
+  if (!Number.isSafeInteger(hops) || (hops as number) < 0) throw new RangeError('omnilimit: hops must be a non-negative integer');
+};
+
 /**
  * Resolve the client IP using only sources your deployment makes trustworthy. Returns
  * `null` rather than guessing when the configured source is missing or malformed.
@@ -183,13 +232,88 @@ export function resolveClientIp(input: IpInput, strategy: IpStrategy): string | 
   const resolved = 'preset' in strategy ? PRESETS[strategy.preset] : strategy;
   if (!resolved) throw new RangeError('omnilimit: unknown IP preset');
   if ('xff' in resolved) {
-    const { hops } = resolved.xff;
-    if (!Number.isSafeInteger(hops) || hops < 0) throw new RangeError('omnilimit: hops must be a non-negative integer');
-    return fromXff(readHeader(input.headers, 'x-forwarded-for'), hops);
+    assertHops(resolved.xff.hops);
+    return fromXff(readHeader(input.headers, 'x-forwarded-for'), resolved.xff.hops);
+  }
+  if ('forwarded' in resolved) {
+    assertHops(resolved.forwarded.hops);
+    return fromForwarded(readHeader(input.headers, 'forwarded'), resolved.forwarded.hops);
   }
   if ('header' in resolved) {
     const value = readHeader(input.headers, resolved.header.toLowerCase());
     return canonicalIp(value === null ? null : trimOws(value));
   }
   return canonicalIp(input.peer);
+}
+
+export type IpWarningCode = 'source_missing' | 'chain_too_short' | 'not_an_address' | 'not_public' | 'forwarding_headers_ignored';
+
+export interface IpWarning {
+  /** Stable, and the same in every port: see "Explaining a resolution" in the spec. */
+  code: IpWarningCode;
+  /** For a person to read. The wording may change between releases. */
+  message: string;
+}
+
+export interface ClientIpReport {
+  /** What `resolveClientIp` returns for the same input and strategy. */
+  ip: string | null;
+  warnings: IpWarning[];
+}
+
+const WARNINGS: Record<IpWarningCode, string> = {
+  source_missing: 'the header or peer address this strategy reads is absent: the request did not come through the proxy you configured for',
+  chain_too_short: 'the forwarding chain has no entry at this hop count: hops is higher than the number of proxies that append to it',
+  not_an_address: 'the value in the trusted position is not a valid address',
+  not_public:
+    'the address resolved is private, loopback or link-local: it is most likely one of your own proxies, so every client behind it shares one bucket. Raise hops, or read the header your edge sets',
+  forwarding_headers_ignored:
+    'the TCP peer is read, but the request carries a forwarding header: a proxy is in front, and the peer is that proxy, not the client',
+};
+
+function isNotPublic(ip: string): boolean {
+  if (!ip.includes(':')) {
+    const [a, b] = ip.split('.').map(Number) as [number, number];
+    return (
+      a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+    );
+  }
+  const groups = parseIpv6(ip) as number[];
+  const first = groups[0] as number;
+  const unspecifiedOrLoopback = groups.slice(0, 7).every((group) => group === 0) && (groups[7] as number) <= 1;
+  return unspecifiedOrLoopback || (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+}
+
+/**
+ * The address a strategy resolves, with what looks wrong about the configuration. For a startup
+ * check, a test or a debug route: it never changes what `resolveClientIp` returns, and it has
+ * no place on the request path.
+ *
+ * ```ts
+ * const { ip, warnings } = explainClientIp({ headers: req.headers, peer }, { xff: { hops: 1 } });
+ * for (const warning of warnings) log.warn(`client ip: ${warning.code}: ${warning.message}`);
+ * ```
+ */
+export function explainClientIp(input: IpInput, strategy: IpStrategy): ClientIpReport {
+  const ip = resolveClientIp(input, strategy);
+  const resolved = 'preset' in strategy ? PRESETS[strategy.preset] : strategy;
+  const codes: IpWarningCode[] = [];
+  if (ip === null) {
+    if ('xff' in resolved || 'forwarded' in resolved) {
+      const [name, hops] = 'xff' in resolved ? ['x-forwarded-for', resolved.xff.hops] : ['forwarded', resolved.forwarded.hops];
+      const value = readHeader(input.headers, name as string);
+      if (value === null) codes.push('source_missing');
+      else codes.push(value.split(',').length <= (hops as number) ? 'chain_too_short' : 'not_an_address');
+    } else if ('header' in resolved) {
+      codes.push(readHeader(input.headers, resolved.header.toLowerCase()) === null ? 'source_missing' : 'not_an_address');
+    } else {
+      codes.push(input.peer ? 'not_an_address' : 'source_missing');
+    }
+  } else if (isNotPublic(ip)) {
+    codes.push('not_public');
+  }
+  if ('peer' in resolved && (readHeader(input.headers, 'x-forwarded-for') !== null || readHeader(input.headers, 'forwarded') !== null)) {
+    codes.push('forwarding_headers_ignored');
+  }
+  return { ip, warnings: codes.map((code) => ({ code, message: WARNINGS[code] })) };
 }

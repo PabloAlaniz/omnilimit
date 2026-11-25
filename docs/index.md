@@ -10,5 +10,6 @@ Rate limiting that behaves the same across stacks, and proves it.
 - [Benchmarks](benchmarks.md)
 - [Quality and security practices](quality.md)
 - [Threat model](threat-model.md)
+- [Stability](stability.md)
 - [How it compares](compare.md)
 - [Specification](https://github.com/PabloAlaniz/omnilimit/blob/main/spec/SPEC.md)

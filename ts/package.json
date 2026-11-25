@@ -197,6 +197,7 @@
     "hono": "^4.13.19",
     "ioredis": "^6.0.0",
     "miniflare": "^4.20260730.0",
+    "omnilimit-released": "npm:omnilimit@0.5.0",
     "pg": "^8.23.1",
     "publint": "^0.3.25",
     "redis": "^6.3.1",

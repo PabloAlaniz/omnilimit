@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createLimiter, memoryStore, type Store } from '../../src/index.js';
 import { ipKey as expressIpKey, rateLimit as expressRateLimit } from '../../src/adapters/express.js';
 import { ipKey as honoIpKey, rateLimit as honoRateLimit } from '../../src/adapters/hono.js';
-import { checkRateLimit, ipKey as nextIpKey, withRateLimit } from '../../src/adapters/next.js';
+import { checkRateLimit, ipKey as nextIpKey, PROBLEM_JSON, problemDetails, withRateLimit } from '../../src/adapters/next.js';
 import { checkRateLimit as webCheck, ipKey as webIpKey, withRateLimit as webWrap } from '../../src/adapters/web.js';
 
 const limiter = (limit = 2, store: Store = memoryStore()) =>
@@ -83,6 +83,35 @@ describe('hono', () => {
       statuses.push(response.status);
     }
     expect(statuses).toEqual([200, 429, 429]);
+  });
+
+  it('problemDetails answers every denial as application/problem+json', async () => {
+    const app = build({ limiter: limiter(1), problemDetails: true });
+    await app.request('/', { headers: cf('203.0.113.1') });
+    const denied = await app.request('/', { headers: cf('203.0.113.1') });
+    expect([denied.status, denied.headers.get('content-type'), denied.headers.get('retry-after')]).toEqual([429, 'application/problem+json', '60']);
+    expect(await denied.text()).toBe(
+      '{"type":"about:blank","title":"Too Many Requests","status":429,"detail":"Rate limit exceeded.","error":"rate_limited","retry_after":60}',
+    );
+    const unidentified = await app.request('/');
+    expect(unidentified.status).toBe(400);
+    expect(await unidentified.json()).toEqual({
+      type: 'about:blank',
+      title: 'Bad Request',
+      status: 400,
+      detail: 'The client could not be identified.',
+      error: 'client_not_identified',
+    });
+    const down = build({ limiter: limiter(1, broken), problemDetails: true });
+    const unavailable = await down.request('/', { headers: cf('203.0.113.1') });
+    expect([unavailable.status, unavailable.headers.get('content-type')]).toEqual([503, 'application/problem+json']);
+    expect(await unavailable.json()).toMatchObject({ title: 'Service Unavailable', error: 'rate_limiter_unavailable', retry_after: 1 });
+  });
+
+  it('onDenied takes precedence over problemDetails', async () => {
+    const app = build({ limiter: limiter(1), problemDetails: true, onDenied: (denial) => new Response('mine', { status: denial.status }) });
+    await app.request('/', { headers: cf('203.0.113.1') });
+    expect(await (await app.request('/', { headers: cf('203.0.113.1') })).text()).toBe('mine');
   });
 
   it('onDenied can answer in the app format, or throw to app.onError with the headers kept', async () => {
@@ -268,6 +297,15 @@ describe('next', () => {
     expect(second.denied?.status).toBe(429);
   });
 
+  it('problemDetails answers as application/problem+json, and the helper serves a custom onDenied', async () => {
+    const shared = { ...options, limiter: limiter(1), problemDetails: true };
+    await checkRateLimit(request(), shared);
+    const { denied } = await checkRateLimit(request(), shared);
+    expect([denied?.status, denied?.headers.get('content-type'), denied?.headers.get('retry-after')]).toEqual([429, PROBLEM_JSON, '60']);
+    expect(await denied?.json()).toMatchObject({ type: 'about:blank', status: 429, error: 'rate_limited', retry_after: 60 });
+    expect(problemDetails({ status: 418, error: 'rate_limited', headers: {} })).toMatchObject({ title: 'Error', status: 418 });
+  });
+
   it('onDenied builds the denial response', async () => {
     const shared = {
       ...options,
@@ -320,6 +358,22 @@ describe('express', () => {
     const response = await fetch(url);
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ message: 'bad key' });
+  });
+
+  it('problemDetails answers as application/problem+json over real HTTP', async () => {
+    const url = await start({ problemDetails: true });
+    await fetch(url);
+    const denied = await fetch(url);
+    expect([denied.status, denied.headers.get('retry-after')]).toEqual([429, '60']);
+    expect(denied.headers.get('content-type')).toMatch(/^application\/problem\+json/);
+    expect(await denied.json()).toEqual({
+      type: 'about:blank',
+      title: 'Too Many Requests',
+      status: 429,
+      detail: 'Rate limit exceeded.',
+      error: 'rate_limited',
+      retry_after: 60,
+    });
   });
 
   it('onDenied answers with the headers already set, and its errors reach next', async () => {

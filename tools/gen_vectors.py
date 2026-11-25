@@ -516,6 +516,94 @@ def from_xff(value: str | None, hops: int) -> str | None:
     return canonical(parts[len(parts) - 1 - hops])
 
 
+def is_port(text: str) -> bool:
+    return 1 <= len(text) <= 5 and all(c in "0123456789" for c in text)
+
+
+def from_forwarded(value: str | None, hops: int) -> str | None:
+    """The `for` of the element `hops` positions from the right of a `Forwarded` header."""
+    if value is None:
+        return None
+    # Every comma, even inside a quoted string: a quote the client opened must not be able to
+    # swallow the element a trusted proxy appended.
+    elements = value.split(",")
+    if len(elements) <= hops:
+        return None
+    node = None
+    for pair in elements[len(elements) - 1 - hops].split(";"):
+        pair = pair.strip(" \t")
+        if pair == "":
+            continue
+        name, equals, text = pair.partition("=")
+        if not equals:
+            return None
+        if name.lower() != "for":
+            continue
+        if node is not None:
+            return None
+        node = text
+    if node is None:
+        return None
+    if node.startswith('"'):
+        if len(node) < 2 or not node.endswith('"'):
+            return None
+        node = node[1:-1]
+        if '"' in node or "\\" in node:
+            return None
+    if node.startswith("["):
+        end = node.find("]")
+        if end == -1:
+            return None
+        host, rest = node[1:end], node[end + 1 :]
+        if ":" not in host or (rest and not (rest[0] == ":" and is_port(rest[1:]))):
+            return None
+        return canonical(host)
+    host, colon, port = node.partition(":")
+    if colon and not is_port(port):
+        return None
+    return canonical(host)
+
+
+NOT_PUBLIC = [
+    ipaddress.ip_network(n)
+    for n in ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "::/128", "::1/128", "fc00::/7", "fe80::/10")
+]
+
+
+def explain(headers: dict, peer: str | None, strategy: dict) -> dict:
+    """The address a strategy resolves, and what looks wrong with the configuration."""
+    warnings = []
+    if "xff" in strategy or "forwarded" in strategy:
+        name, read = ("x-forwarded-for", from_xff) if "xff" in strategy else ("forwarded", from_forwarded)
+        hops = strategy[name.replace("x-forwarded-for", "xff")]["hops"]
+        value = headers.get(name)
+        ip = read(value, hops)
+        if value is None:
+            warnings.append("source_missing")
+        elif len(value.split(",")) <= hops:
+            warnings.append("chain_too_short")
+        elif ip is None:
+            warnings.append("not_an_address")
+    elif "header" in strategy:
+        value = headers.get(strategy["header"])
+        ip = canonical(None if value is None else value.strip(" \t"))
+        if value is None:
+            warnings.append("source_missing")
+        elif ip is None:
+            warnings.append("not_an_address")
+    else:
+        ip = canonical(peer)
+        if not peer:
+            warnings.append("source_missing")
+        elif ip is None:
+            warnings.append("not_an_address")
+    if ip is not None and any(ipaddress.ip_address(ip) in network for network in NOT_PUBLIC if network.version == ipaddress.ip_address(ip).version):
+        warnings.append("not_public")
+    if "peer" in strategy and ("x-forwarded-for" in headers or "forwarded" in headers):
+        warnings.append("forwarding_headers_ignored")
+    return {"ip": ip, "warnings": warnings}
+
+
 def masked(ip: str | None, prefix: int) -> str | None:
     if ip is None:
         return None
@@ -572,6 +660,59 @@ def ips() -> dict[str, dict]:
     xff("next-line-is-not-whitespace", f"{spoof}, {client}\u0085", 0)
     xff("unit-separator-is-not-whitespace", f"{spoof}, \u001f{client}", 0)
 
+    def fwd(name, value, hops):
+        cases.append(
+            {
+                "name": f"forwarded-{name}",
+                "headers": {} if value is None else {"forwarded": value},
+                "peer": "10.0.0.1",
+                "strategy": {"forwarded": {"hops": hops}},
+                "expect": from_forwarded(value, hops),
+            }
+        )
+
+    # RFC 7239. The same rule as X-Forwarded-For: count from the right, never guess.
+    fwd("rightmost-with-zero-hops", f"for={spoof}, for={client}", 0)
+    fwd("spoofed-left-elements-are-ignored", f"for={spoof}, for=7.7.7.7, for={client};proto=https, for={lb}", 1)
+    fwd("chain-shorter-than-hops-is-null", f"for={client}", 1)
+    fwd("missing-header-is-null", None, 0)
+    fwd("empty-header-is-null", "", 0)
+    fwd("other-parameters-around-it", f"by=10.0.0.9;for={client};host=example.com;proto=https", 0)
+    fwd("parameter-name-in-any-case", f"For={client}", 0)
+    fwd("spaces-around-pairs", f"for={spoof},  for={client} ; proto=https ", 0)
+    fwd("empty-pairs-are-skipped", f";for={client};;", 0)
+    fwd("element-without-for-is-null", f"for={spoof}, proto=https;by=10.0.0.9", 0)
+    fwd("two-for-in-one-element-is-null", f"for={client};for={spoof}", 0)
+    fwd("pair-without-equals-is-null", f"for={client};secure", 0)
+    fwd("space-before-equals-is-null", f"for ={client}", 0)
+    fwd("space-after-equals-is-null", f"for= {client}", 0)
+    fwd("ipv4-with-port", f"for={client}:4711", 0)
+    fwd("ipv4-with-port-quoted", f'for="{client}:4711"', 0)
+    fwd("ipv4-with-a-word-for-a-port-is-null", f"for={client}:http", 0)
+    fwd("ipv4-with-a-long-port-is-null", f"for={client}:123456", 0)
+    fwd("ipv4-with-an-empty-port-is-null", f"for={client}:", 0)
+    fwd("ipv6-quoted-and-bracketed", 'for="[2001:DB8:0:0:0:0:0:1]"', 0)
+    fwd("ipv6-with-port", 'for="[2001:db8::1]:4711"', 0)
+    fwd("ipv6-bracketed-without-quotes", "for=[2001:db8::1]", 0)
+    fwd("ipv6-without-brackets-is-null", 'for="2001:db8::1"', 0)
+    fwd("ipv6-mapped-becomes-ipv4", f'for="[::ffff:{client}]"', 0)
+    fwd("ipv4-in-brackets-is-null", f'for="[{client}]"', 0)
+    fwd("bracket-not-closed-is-null", 'for="[2001:db8::1"', 0)
+    fwd("text-after-the-bracket-is-null", 'for="[2001:db8::1]x"', 0)
+    fwd("zone-is-null", 'for="[fe80::1%eth0]"', 0)
+    fwd("unknown-is-null", "for=unknown", 0)
+    fwd("obfuscated-is-null", "for=_hidden", 0)
+    fwd("quote-not-closed-is-null", f'for="{client}', 0)
+    fwd("quote-inside-is-null", f'for="{client}""', 0)
+    fwd("escape-inside-is-null", f'for="{client}\\"', 0)
+    fwd("empty-value-is-null", "for=", 0)
+    # The client opens a quote and never closes it. Split with respect for quotes, the element
+    # the proxy appended would vanish into the client's; split on every comma, it stands.
+    fwd("a-quote-opened-by-the-client-does-not-swallow-the-trusted-element", f'for="{spoof}, for={client}', 0)
+    fwd("a-comma-inside-quotes-still-separates", f'for="{spoof},{lb}", for={client}', 1)
+    fwd("x-forwarded-for-is-not-read", None, 0)
+    cases[-1]["headers"] = {"x-forwarded-for": client}
+
     for name, headers_, peer, preset, expect in [
         ("cloudflare-reads-its-header", {"cf-connecting-ip": client, "x-forwarded-for": spoof}, "10.0.0.1", "cloudflare", client),
         ("cloudflare-without-header-is-null", {"x-forwarded-for": client}, "10.0.0.1", "cloudflare", None),
@@ -587,6 +728,43 @@ def ips() -> dict[str, dict]:
     ]:
         cases.append({"name": name, "headers": headers_, "peer": peer, "strategy": {"preset": preset}, "expect": expect})
 
+    explained = []
+
+    def exp(name, headers_, peer, strategy):
+        explained.append({"name": name, "headers": headers_, "peer": peer, "strategy": strategy, "expect": explain(headers_, peer, strategy)})
+
+    x = lambda hops: {"xff": {"hops": hops}}  # noqa: E731
+    f = lambda hops: {"forwarded": {"hops": hops}}  # noqa: E731
+    exp("a-public-address-has-no-warning", {"x-forwarded-for": f"{spoof}, {client}"}, "10.0.0.1", x(0))
+    exp("no-header-is-source-missing", {}, "10.0.0.1", x(0))
+    exp("too-few-entries-is-chain-too-short", {"x-forwarded-for": client}, "10.0.0.1", x(1))
+    exp("junk-in-the-trusted-position-is-not-an-address", {"x-forwarded-for": f"{client}, junk"}, "10.0.0.1", x(0))
+    exp("an-empty-header-is-not-an-address", {"x-forwarded-for": ""}, "10.0.0.1", x(0))
+    # The usual mistake: one hop too few, so the address is the load balancer's own.
+    exp("a-private-address-is-not-public", {"x-forwarded-for": f"{client}, 10.1.2.3"}, "10.0.0.1", x(0))
+    for private in ("0.1.2.3", "10.255.255.255", "100.64.0.1", "100.127.255.255", "127.0.0.1", "169.254.169.254", "172.16.0.1", "172.31.255.255", "192.168.1.1", "::1", "::", "fc00::1", "fdff::1", "fe80::1", "febf::1", "::ffff:10.0.0.1"):
+        exp(f"not-public-{private}", {"x-forwarded-for": private}, None, x(0))
+    for public in ("1.1.1.1", "9.255.255.255", "11.0.0.0", "100.63.255.255", "100.128.0.0", "126.255.255.255", "128.0.0.0", "169.253.0.1", "169.255.0.1", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.0", "2001:db8::1", "fbff::1", "fe00::1", "fe7f::1", "fec0::1", "::2", "::ffff:8.8.8.8"):
+        exp(f"public-{public}", {"x-forwarded-for": public}, None, x(0))
+    exp("forwarded-public", {"forwarded": f"for={spoof}, for={client}"}, None, f(0))
+    exp("forwarded-missing", {"x-forwarded-for": client}, None, f(0))
+    exp("forwarded-too-short", {"forwarded": f"for={client}"}, None, f(2))
+    exp("forwarded-without-for-is-not-an-address", {"forwarded": "proto=https"}, None, f(0))
+    exp("forwarded-unknown-is-not-an-address", {"forwarded": "for=unknown"}, None, f(0))
+    exp("forwarded-private", {"forwarded": 'for="[fd00::7]:443"'}, None, f(0))
+    exp("header-public", {"x-real-ip": f" {client} "}, None, {"header": "x-real-ip"})
+    exp("header-missing", {}, None, {"header": "x-real-ip"})
+    exp("header-with-a-list-is-not-an-address", {"x-real-ip": f"{spoof}, {client}"}, None, {"header": "x-real-ip"})
+    exp("header-private", {"x-real-ip": "192.168.0.9"}, None, {"header": "x-real-ip"})
+    exp("peer-public", {}, client, {"peer": True})
+    exp("peer-missing", {}, None, {"peer": True})
+    exp("peer-empty", {}, "", {"peer": True})
+    exp("peer-junk", {}, "unix:/tmp/sock", {"peer": True})
+    # The other usual mistake: the peer is read, and the peer is a proxy.
+    exp("peer-private-behind-a-proxy", {"x-forwarded-for": client}, "10.0.0.1", {"peer": True})
+    exp("peer-public-with-forwarded", {"forwarded": f"for={client}"}, lb, {"peer": True})
+    exp("xff-strategy-does-not-mind-other-headers", {"x-forwarded-for": client, "forwarded": f"for={spoof}"}, None, x(0))
+
     masks = []
     for ip, prefix in [
         ("2001:db8:1:2:3:4:5:6", 64),
@@ -596,7 +774,7 @@ def ips() -> dict[str, dict]:
         ("203.0.113.7", 64),
     ]:
         masks.append({"ip": ip, "prefix": prefix, "expect": masked(ip, prefix)})
-    return {"ip/strategies": {"spec": SPEC, "id": "ip/strategies", "kind": "ip", "cases": cases, "masks": masks}}
+    return {"ip/strategies": {"spec": SPEC, "id": "ip/strategies", "kind": "ip", "cases": cases, "masks": masks, "explain": explained}}
 
 
 def failures() -> dict[str, dict]:
@@ -736,6 +914,33 @@ def contract() -> dict[str, dict]:
             ],
         },
     }
+
+
+PROBLEM_TITLES = {400: "Bad Request", 429: "Too Many Requests", 503: "Service Unavailable"}
+PROBLEM_DETAILS = {
+    "rate_limited": "Rate limit exceeded.",
+    "rate_limiter_unavailable": "The rate limiter is unavailable.",
+    "client_not_identified": "The client could not be identified.",
+}
+
+
+def problem(error: str, status: int, headers: dict) -> dict:
+    """The problem details body (RFC 9457) of a denial, and its exact JSON text."""
+    body: dict = {"type": "about:blank", "title": PROBLEM_TITLES[status], "status": status, "detail": PROBLEM_DETAILS[error], "error": error}
+    if "retry-after" in headers:
+        body["retry_after"] = int(headers["retry-after"])
+    return {"error": error, "status": status, "headers": headers, "expect": body, "json": json.dumps(body, separators=(",", ":"))}
+
+
+def problems() -> dict[str, dict]:
+    cases = [
+        problem("rate_limited", 429, {"retry-after": "12"}),
+        problem("rate_limited", 429, {"retry-after": "1", "ratelimit-policy": '"login";q=5;w=60', "ratelimit": '"login";r=0;t=1'}),
+        problem("rate_limited", 429, {"retry-after": "86400", "x-ratelimit-limit": "5", "x-ratelimit-remaining": "0", "x-ratelimit-reset": "86400"}),
+        problem("rate_limiter_unavailable", 503, {"retry-after": "1"}),
+        problem("client_not_identified", 400, {}),
+    ]
+    return {"contract/problem-details": {"spec": SPEC, "id": "contract/problem-details", "kind": "contract", "subject": "problem", "cases": cases}}
 
 
 SHORTHAND_UNITS = {"second": 1000, "minute": 60_000, "hour": 3_600_000, "day": 86_400_000}
@@ -2049,7 +2254,7 @@ def recipe_concurrency() -> dict[str, dict]:
 
 def build() -> dict[str, dict]:
     out: dict[str, dict] = {}
-    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands(), recipes()):
+    for part in (sequences(), keys(), ips(), failures(), concurrency(), contract(), shorthands(), problems(), recipes()):
         out.update(part)
     return out
 

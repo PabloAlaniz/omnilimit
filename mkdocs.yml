@@ -10,5 +10,6 @@ nav:
   - Benchmarks: benchmarks.md
   - Quality and security: quality.md
   - Threat model: threat-model.md
+  - Stability: stability.md
   - How it compares: compare.md
   - Roadmap: roadmap.md

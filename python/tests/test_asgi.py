@@ -13,7 +13,16 @@ from starlette.routing import Mount, Route
 from starlette.testclient import TestClient
 
 from omnilimit import AsyncLimiter, HitParams, Limiter, MemoryStore, RawHit
-from omnilimit.asgi import AsgiContext, Denial, DeniedResponse, Headers, RateLimitMiddleware, ip_key
+from omnilimit.asgi import (
+    PROBLEM_JSON,
+    AsgiContext,
+    Denial,
+    DeniedResponse,
+    Headers,
+    RateLimitMiddleware,
+    ip_key,
+    problem_details,
+)
 
 POLICY: dict[str, Any] = {"scope": "t", "limit": 1, "window_ms": 60_000, "on_store_error": "closed"}
 
@@ -273,3 +282,40 @@ def test_shadow_mode_passes_what_it_would_deny_without_headers(kind: Any) -> Non
         response = client.get("/", headers=CF)
         assert response.status_code == 200
         assert not [h for h in response.headers if "ratelimit" in h or h == "retry-after"]
+
+
+@both
+def test_problem_details_answers_every_denial_as_problem_json(limiter: Any) -> None:
+    client = _client(limiter=_fresh(limiter), problem_details=True)
+    client.get("/", headers=CF)
+    denied = client.get("/", headers=CF)
+    assert denied.status_code == 429
+    assert denied.headers["content-type"] == PROBLEM_JSON
+    assert denied.headers["retry-after"] == "60"
+    assert denied.text == (
+        '{"type":"about:blank","title":"Too Many Requests","status":429,'
+        '"detail":"Rate limit exceeded.","error":"rate_limited","retry_after":60}'
+    )
+    unidentified = client.get("/")
+    assert unidentified.status_code == 400
+    assert unidentified.json() == {
+        "type": "about:blank",
+        "title": "Bad Request",
+        "status": 400,
+        "detail": "The client could not be identified.",
+        "error": "client_not_identified",
+    }
+
+
+def test_on_denied_takes_precedence_over_problem_details() -> None:
+    def on_denied(context: AsgiContext, denial: Denial) -> DeniedResponse:
+        # The helper is there for a hook that wants the same body with something added.
+        return DeniedResponse(
+            body=str(problem_details(denial)["title"]).encode(), media_type="text/plain"
+        )
+
+    client = _client(
+        limiter=Limiter(**POLICY, store=MemoryStore()), problem_details=True, on_denied=on_denied
+    )
+    client.get("/", headers=CF)
+    assert client.get("/", headers=CF).text == "Too Many Requests"

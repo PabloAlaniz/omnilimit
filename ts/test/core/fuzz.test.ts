@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { parsePolicy, resolvePolicy } from '../../src/core/gcra.js';
 import { deriveKey } from '../../src/core/key.js';
-import { maskIp, resolveClientIp } from '../../src/ip/index.js';
+import { maskIp, resolveClientIp, type IpStrategy } from '../../src/ip/index.js';
 import { memoryStore } from '../../src/stores/memory.js';
 import { fuzzOf, fuzzSeed, fuzzVectors, withSeed } from '../support/fuzz.js';
 import { runOrder } from '../support/schedule.js';
@@ -37,7 +37,7 @@ describe.skipIf(fuzzSeed === null)(`fuzz vectors, seed ${fuzzSeed}`, () => {
   it('resolves client IPs', () => {
     for (const vector of fuzzOf('ip')) {
       for (const c of vector.cases) {
-        const strategy = c.strategy.preset ? { preset: c.strategy.preset } : { xff: c.strategy.xff };
+        const strategy = c.strategy as IpStrategy;
         const context = withSeed(JSON.stringify(c));
         expect(resolveClientIp({ headers: c.headers, peer: c.peer }, strategy), context).toBe(c.expect);
       }

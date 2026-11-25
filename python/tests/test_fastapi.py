@@ -11,11 +11,13 @@ from fastapi.testclient import TestClient
 
 from omnilimit import AsyncLimiter, HitParams, Limiter, MemoryStore, RawHit
 from omnilimit.fastapi import (
+    PROBLEM_JSON,
     Denial,
     KeyContext,
     RateLimitDenied,
     denied_handler,
     ip_key,
+    problem_details,
     rate_limit,
 )
 
@@ -450,4 +452,34 @@ def test_on_denied_without_the_handler_fails_loudly(limiter: Any) -> None:
     client = _custom_app(_fresh(limiter), on_denied, handler=False, key=lambda _: "x")
     assert client.get("/").status_code == 200
     with pytest.raises(TypeError, match="denied_handler"):
+        client.get("/")
+
+
+@both
+def test_problem_details_answers_every_denial_as_problem_json(limiter: Any) -> None:
+    client = _custom_app(_fresh(limiter), None, key=lambda _: "x", problem_details=True)
+    assert client.get("/").status_code == 200
+    denied = client.get("/")
+    assert denied.status_code == 429
+    assert denied.headers["content-type"] == PROBLEM_JSON
+    assert denied.headers["retry-after"] == "60"
+    assert denied.text == (
+        '{"type":"about:blank","title":"Too Many Requests","status":429,'
+        '"detail":"Rate limit exceeded.","error":"rate_limited","retry_after":60}'
+    )
+    unidentified = _custom_app(_fresh(limiter), None, key=lambda _: None, problem_details=True)
+    response = unidentified.get("/")
+    assert response.status_code == 400
+    assert response.json() == problem_details(
+        Denial(status=400, headers={}, error="client_not_identified", decision=None)
+    )
+
+
+@both
+def test_problem_details_without_the_handler_fails_loudly(limiter: Any) -> None:
+    client = _custom_app(
+        _fresh(limiter), None, handler=False, key=lambda _: "x", problem_details=True
+    )
+    assert client.get("/").status_code == 200
+    with pytest.raises(TypeError, match="problem_details needs"):
         client.get("/")

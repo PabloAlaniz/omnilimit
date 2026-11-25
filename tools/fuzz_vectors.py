@@ -204,6 +204,38 @@ def ips(rng: random.Random, count: int) -> dict[str, dict]:
                 "expect": gv.from_xff(value, hops),
             }
         )
+    for n in range(count * 20):
+        hops = rng.choice([0, 0, 0, 1, 1, 2, 3])
+        elements = []
+        for _ in range(rng.choice([1, 1, 2, 3, 4])):
+            node = address(rng)
+            shape = rng.randrange(8)
+            if shape == 0 and ":" in node:
+                node = f"[{node}]"
+            elif shape == 1 and ":" in node:
+                node = f'"[{node}]"'
+            elif shape == 2 and ":" in node:
+                node = f'"[{node}]:{rng.choice(["80", "65535", "0", "123456", "", "x"])}"'
+            elif shape == 3:
+                node = f"{node}:{rng.choice(['80', '4711', '', 'http', '99999', '100000'])}"
+            elif shape == 4:
+                node = f'"{node}"'
+            elif shape == 5:
+                node = rng.choice(["unknown", "_hidden", '"', '"[', "[]", '"[]"', '"\\"', ""]) + rng.choice(["", node])
+            pairs = [f"{rng.choice(['for', 'for', 'for', 'For', 'FOR', 'for ', ' for', 'fo'])}{rng.choice(['=', '=', '=', '=', ' = ', ''])}{node}"]
+            for _ in range(rng.choice([0, 0, 1, 2])):
+                pairs.insert(rng.randrange(len(pairs) + 1), rng.choice(["proto=https", "by=10.0.0.1", "host=a.example", "", " ", "secure", "for=1.2.3.4", 'by="x;y"', 'host="a,b"']))
+            elements.append(rng.choice(["", "", " ", "\t"]) + ";".join(pairs) + rng.choice(["", "", " "]))
+        value = ",".join(elements).replace("\n", "").replace("\x00", "")
+        cases.append(
+            {
+                "name": f"forwarded-{n:05d}",
+                "headers": {"forwarded": value},
+                "peer": "10.0.0.1",
+                "strategy": {"forwarded": {"hops": hops}},
+                "expect": gv.from_forwarded(value, hops),
+            }
+        )
     for n in range(count * 10):
         peer = address(rng)
         cases.append({"name": f"peer-{n:05d}", "headers": {}, "peer": peer, "strategy": {"preset": "direct"}, "expect": gv.canonical(peer)})

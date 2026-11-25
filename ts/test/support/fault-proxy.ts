@@ -36,16 +36,19 @@ export async function faultProxy(target: string): Promise<FaultProxy> {
   const links = new Set<Link>();
   let mode: Mode = 'pass';
 
+  // A socket without an encoding emits Buffers; since @types/node 26 the event is typed string | Buffer.
+  const asBuffer = (chunk: string | Buffer) => (typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+
   const server = createServer((client) => {
     const upstream = connect({ host, port });
     const link: Link = { client, upstream, toUpstream: [], toClient: [] };
     links.add(link);
     client.on('data', (chunk) => {
-      if (mode === 'hold-requests') link.toUpstream.push(chunk);
+      if (mode === 'hold-requests') link.toUpstream.push(asBuffer(chunk));
       else upstream.write(chunk);
     });
     upstream.on('data', (chunk) => {
-      if (mode === 'hold-replies') link.toClient.push(chunk);
+      if (mode === 'hold-replies') link.toClient.push(asBuffer(chunk));
       else client.write(chunk);
     });
     const drop = () => {

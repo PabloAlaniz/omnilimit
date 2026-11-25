@@ -448,6 +448,18 @@ true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
   the chain and from a single-IP header. Any other character makes the value invalid.
   Anything to the left of what your own proxies appended is client controlled.
 - A chain with `hops` entries or fewer gives `null`. It never falls back to the first value.
+- `forwarded` with `hops` reads the `Forwarded` header of RFC 7239 the same way: split into
+  elements, take the one `hops` positions from the right, and use its `for` parameter.
+  - Elements are split on every comma, and the parameters of the chosen element on every
+    semicolon, even inside a quoted string. A quote opened in an element the client wrote must
+    not swallow the one a trusted proxy appended, and no address contains either character.
+  - A parameter is `name=value` with nothing around the `=`; spaces and tabs around a parameter
+    are trimmed, and an empty one is skipped. Names compare without case. The element must have
+    exactly one `for`, and every parameter in it must have an `=`.
+  - The value may be in double quotes. Inside them, a quote or a backslash makes it invalid.
+  - The value is an IPv4 address, or an IPv6 address in square brackets, each optionally followed
+    by `:` and a port of one to five digits. The port is dropped. `unknown`, an obfuscated
+    identifier, an IPv6 address without brackets and an IPv4 address inside them are invalid.
 - An invalid value in the chosen position gives `null`.
 - IPv4 uses strict decimal octets. IPv6 follows RFC 5952, zone identifiers are rejected, and
   IPv4-mapped addresses become IPv4.
@@ -462,6 +474,27 @@ true` runs a shadow limiter, and so does a recipe limiter with `"shadow": true`.
 | `direct` | TCP peer | Nothing proxies the app |
 
 Verify these against your deployment. A preset cannot detect a topology it does not match.
+
+### Explaining a resolution
+
+A port can report, next to the address a strategy resolves, what looks wrong with the
+configuration. It is for a startup check, a test or a debug route, never for the request path:
+the address is the one the strategy gives, and a warning changes nothing.
+
+| Warning | When |
+|---|---|
+| `source_missing` | The header the strategy reads is absent, or there is no peer address |
+| `chain_too_short` | The `X-Forwarded-For` or `Forwarded` chain has `hops` entries or fewer |
+| `not_an_address` | The value in the chosen position is not a valid address |
+| `not_public` | The address resolved is in one of the ranges below: it is most likely a proxy of your own, and every client behind it would share one bucket |
+| `forwarding_headers_ignored` | The strategy reads the TCP peer, and the request carries `X-Forwarded-For` or `Forwarded`: a proxy is in front, and the peer is that proxy |
+
+- A resolution that gives `null` has exactly one of the first three, in that order of
+  precedence. One that gives an address has `not_public` or nothing.
+- `forwarding_headers_ignored` is independent of the others and comes last.
+- Not public: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`,
+  `172.16.0.0/12`, `192.168.0.0/16`, `::`, `::1`, `fc00::/7` and `fe80::/10`. An IPv4-mapped
+  address is judged as the IPv4 address it becomes.
 
 ## Headers
 
@@ -479,16 +512,38 @@ The effective window is the retry time when denied, the time until the next unit
 `X-RateLimit-Remaining` and `X-RateLimit-Reset` (seconds, as a delta). `Retry-After`
 (`ceil(retry_after_ms/1000)`) is always sent on denial, in every profile including `none`.
 
+## Problem details
+
+An adapter answers a denied request with `{"error": "<code>"}` unless told otherwise. It can be
+asked for a problem details body instead (RFC 9457), sent as `application/problem+json` with the
+same status and headers:
+
+```text
+{"type":"about:blank","title":<title>,"status":<status>,"detail":<detail>,"error":<code>,"retry_after":<seconds>}
+```
+
+| `error` | Status | `title` | `detail` |
+|---|---|---|---|
+| `rate_limited` | 429 | `Too Many Requests` | `Rate limit exceeded.` |
+| `rate_limiter_unavailable` | 503 | `Service Unavailable` | `The rate limiter is unavailable.` |
+| `client_not_identified` | 400 | `Bad Request` | `The client could not be identified.` |
+
+- `type` is `about:blank`, for which RFC 9457 makes `title` the phrase of the status code. The
+  code a program should read is `error`, the same one the default body carries.
+- `retry_after` is the number in the `Retry-After` header, and is absent when the header is.
+- The members come in this order with no whitespace between them, so every port sends the same
+  bytes.
+
 ## Vector kinds
 
 | Kind | Tests |
 |---|---|
 | `sequence` | Decisions, public values, headers and raw state, step by step |
 | `key` | Key derivation |
-| `ip` | Client IP strategies, canonical form and masking |
+| `ip` | Client IP strategies, canonical form, masking, and the warnings of an explained resolution |
 | `failure` | Each fault with each failure mode, and a refund that fails |
 | `concurrency` | 200 simultaneous hits allow exactly `burst`; recipes run by many callers at once keep their bounds |
-| `contract` | Policy, scope and cost validation, the policy shorthand, and the approximate decision shape |
+| `contract` | Policy, scope and cost validation, the policy shorthand, the approximate decision shape, and the problem details body |
 | `recipe` | Combined checks, pending checks and lockouts: store calls in order, decisions, the governing one, refunds, and errors |
 
 Changing the meaning of a vector requires a new spec version.

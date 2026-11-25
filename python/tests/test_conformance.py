@@ -20,13 +20,15 @@ from support import (
     run_sequence,
     run_sequence_async,
     shadowed_field,
+    strategy_kwargs,
     vectors_of,
 )
 
 from omnilimit import SPEC_VERSION, AsyncLimiter, HitParams, Limiter, MemoryStore, RawHit
+from omnilimit._adapter import Denial, problem_body, problem_details
 from omnilimit._gcra import assert_scope, parse_policy, resolve_policy
 from omnilimit._key import derive_key
-from omnilimit.ip import canonical_ip, mask_ip, resolve_client_ip
+from omnilimit.ip import canonical_ip, explain_client_ip, mask_ip, resolve_client_ip
 
 
 def _by_id(kind: str) -> Any:
@@ -109,15 +111,29 @@ class MultiLine:
 @pytest.mark.parametrize("case", _IP["cases"], ids=lambda c: c["name"])
 def test_ip_strategies(case: dict[str, Any]) -> None:
     strategy = case["strategy"]
-    kwargs: dict[str, Any] = (
-        {"preset": strategy["preset"]}
-        if "preset" in strategy
-        else {"xff_hops": strategy["xff"]["hops"]}
-    )
+    kwargs = strategy_kwargs(strategy)
     assert resolve_client_ip(case["headers"], case.get("peer"), **kwargs) == case["expect"]
     # A framework's headers object must behave the same as a plain mapping.
     wrapped = MultiLine(case["headers"])
     assert resolve_client_ip(wrapped, case.get("peer"), **kwargs) == case["expect"]
+
+
+@pytest.mark.parametrize("case", _IP["explain"], ids=lambda c: c["name"])
+def test_ip_explained(case: dict[str, Any]) -> None:
+    kwargs = strategy_kwargs(case["strategy"])
+    for headers in (case["headers"], MultiLine(case["headers"])):
+        report = explain_client_ip(headers, case.get("peer"), **kwargs)
+        assert {"ip": report.ip, "warnings": [w.code for w in report.warnings]} == case["expect"]
+        assert report.ip == resolve_client_ip(headers, case.get("peer"), **kwargs)
+        assert all(len(w.message) > 20 for w in report.warnings)
+
+
+def test_ip_explained_for_a_preset() -> None:
+    assert [w.code for w in explain_client_ip({}, None, preset="cloudflare").warnings] == [
+        "source_missing"
+    ]
+    report = explain_client_ip({"x-forwarded-for": "10.0.0.1"}, "10.0.0.2", preset="direct")
+    assert [w.code for w in report.warnings] == ["not_public", "forwarding_headers_ignored"]
 
 
 @pytest.mark.parametrize("mask", _IP["masks"], ids=lambda m: f"{m['ip']}/{m['prefix']}")
@@ -309,6 +325,15 @@ def test_cost_validation_async() -> None:
             await limiter.check("x", cost=5)
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("case", _contract("problem")["cases"], ids=lambda c: c["json"])
+def test_problem_details_to_the_byte(case: dict[str, Any]) -> None:
+    denial = Denial(
+        status=case["status"], headers=case["headers"], error=case["error"], decision=None
+    )
+    assert problem_details(denial) == case["expect"]
+    assert problem_body(denial) == case["json"].encode()
 
 
 @pytest.mark.parametrize("case", _contract("shorthand")["cases"], ids=lambda c: repr(c["text"]))
