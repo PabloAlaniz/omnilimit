@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import inspect
 import threading
 import time
@@ -13,22 +14,26 @@ from typing import Any, Literal, TypeVar
 
 from omnilimit._gcra import assert_cost, assert_scope, resolve_policy, view_of
 from omnilimit._headers import build_headers
-from omnilimit._key import derive_key
+from omnilimit._key import bucket_key, key_prefix, salt_prefix
 from omnilimit._types import (
     AsyncStore,
     Decision,
     EventHook,
     HeaderInput,
     HeaderOption,
+    HeaderProfile,
     HitParams,
     LimiterEvent,
     OnStoreError,
     Op,
     RawHit,
+    Reason,
     Reservation,
     Reserved,
     Store,
     Tier,
+    defer_headers,
+    make_decision,
 )
 
 _DEFAULT_STORE_TIMEOUT_MS = 1000
@@ -89,9 +94,10 @@ class _Core:
         self.salt = salt
         self.on_event = on_event
         self._spend_lock = threading.Lock()
-
-    def key(self, id_value: str) -> str:
-        return derive_key(self.scope, self.policy, self.salt, id_value)
+        # Only the id changes from one key of a limiter to the next.
+        self.key: Callable[[str], str] = functools.partial(
+            bucket_key, key_prefix(scope, self.policy), salt_prefix(salt)
+        )
 
     def _emit(self, event: LimiterEvent) -> None:
         if self.on_event is None:
@@ -104,15 +110,37 @@ class _Core:
         if self.shadow:
             # A client must not see, and adapt to, a limit that is not enforced.
             return self._shadowed(decision)
-        data = HeaderInput(
+        headers = self.headers
+        if not callable(headers):
+            # A profile only reads the decision, so its headers can wait until they are read.
+            defer_headers(decision, (self, headers, effective_ms))
+            return decision
+        # A header function is the caller's code: it runs now, once, whoever reads the result.
+        built = headers(self._header_input(decision, effective_ms))
+        return make_decision(
+            decision.allowed,
+            decision.reason,
+            decision.status,
+            decision.remaining,
+            decision.reset_ms,
+            decision.retry_after_ms,
+            decision.tier,
+            built,
+        )
+
+    def _header_input(self, decision: Decision, effective_ms: int) -> HeaderInput:
+        return HeaderInput(
             scope=self.scope,
             limit=self.policy.limit,
             window_ms=self.policy.window_ms,
             decision=decision,
             effective_ms=effective_ms,
         )
-        built = self.headers(data) if callable(self.headers) else build_headers(self.headers, data)
-        return replace(decision, headers=built)
+
+    def profile_headers(
+        self, profile: HeaderProfile, decision: Decision, effective_ms: int
+    ) -> dict[str, str]:
+        return build_headers(profile, self._header_input(decision, effective_ms))
 
     def weighed(self, cost: int) -> HitParams:
         """What the store receives for a request of this cost.
@@ -143,41 +171,37 @@ class _Core:
         return replace(decision, allowed=True, status=None, shadowed=True)
 
     def from_hit(self, hit: RawHit, op: Op = "check", amount: int | None = None) -> Decision:
-        decision = self._from_hit(hit, amount)
-        event_type: Literal["allowed", "limited"] = "allowed" if hit.allowed else "limited"
+        allowed = hit.allowed
+        reason: Reason = "ok" if allowed else "limited"
+        status: Literal[429] | None = None if allowed else 429
+        level = hit.level
+        if level is None:
+            remaining = reset_ms = retry_after_ms = None
+            if not allowed:
+                retry_after_ms = (
+                    hit.retry_after_ms if hit.retry_after_ms is not None else self.policy.window_ms
+                )
+            effective_ms = retry_after_ms or 0
+        else:
+            remaining, reset_ms, retry_after_ms, effective_ms = view_of(
+                allowed, level, self.policy, amount
+            )
+        decision = self._finish(
+            make_decision(allowed, reason, status, remaining, reset_ms, retry_after_ms, self.tier),
+            effective_ms,
+        )
+        if self.on_event is None:
+            return decision
+        event_type: Literal["allowed", "limited"] = "allowed" if allowed else "limited"
         self._emit(
             LimiterEvent(event_type, self.scope, self.tier, op=op, shadowed=decision.shadowed)
         )
         return decision
 
-    def _from_hit(self, hit: RawHit, amount: int | None) -> Decision:
-        base = Decision(
-            allowed=hit.allowed,
-            reason="ok" if hit.allowed else "limited",
-            status=None if hit.allowed else 429,
-            remaining=None,
-            reset_ms=None,
-            retry_after_ms=None,
-            tier=self.tier,
-        )
-        if hit.level is None:
-            retry_after_ms = None
-            if not hit.allowed:
-                retry_after_ms = (
-                    hit.retry_after_ms if hit.retry_after_ms is not None else self.policy.window_ms
-                )
-            return self._finish(replace(base, retry_after_ms=retry_after_ms), retry_after_ms or 0)
-        view = view_of(hit.allowed, hit.level, self.policy, amount)
-        decision = replace(
-            base,
-            remaining=view.remaining,
-            reset_ms=view.reset_ms,
-            retry_after_ms=view.retry_after_ms,
-        )
-        return self._finish(decision, view.effective_ms)
-
     def from_failure(self, error: Exception, op: Op = "check") -> Decision:
         decision = self._from_failure()
+        if self.on_event is None:
+            return decision
         self._emit(
             LimiterEvent(
                 "store_error", self.scope, self.tier, error, op=op, shadowed=decision.shadowed
@@ -188,14 +212,14 @@ class _Core:
     def _from_failure(self) -> Decision:
         # Reports nothing about quota: the store could not say anything about it.
         allowed = self.on_store_error == "open"
-        decision = Decision(
-            allowed=allowed,
-            reason="store_error",
-            status=None if allowed else 503,
-            remaining=None,
-            reset_ms=None,
-            retry_after_ms=None if allowed else _STORE_ERROR_RETRY_MS,
-            tier=self.tier,
+        decision = make_decision(
+            allowed,
+            "store_error",
+            None if allowed else 503,
+            None,
+            None,
+            None if allowed else _STORE_ERROR_RETRY_MS,
+            self.tier,
         )
         return self._finish(decision, 0)
 
@@ -353,9 +377,19 @@ class Limiter:
         burst, anything else raises `ValueError`. A denied request counts nothing, whatever its
         cost. `now_ms` exists for conformance vectors only.
         """
-        params = self._core.weighed(cost)
-        key = self._core.key(id_value)
-        return self._decide("check", lambda: self._store.hit(key, params, now_ms), params.window_ms)
+        core = self._core
+        params = core.weighed(cost)
+        key = core.key(id_value)
+        if core.tier != "local":
+            return self._decide(
+                "check", lambda: self._store.hit(key, params, now_ms), params.window_ms
+            )
+        # What `_decide` does for a local store, without the calls in between.
+        try:
+            hit = self._store.hit(key, params, now_ms)
+        except Exception as error:
+            return core.from_failure(error, "check")
+        return core.from_hit(hit, "check", params.window_ms)
 
     def peek(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """The decision `check` would give now, without counting.
@@ -457,6 +491,7 @@ class AsyncLimiter:
             on_event=on_event,
             shadow=shadow,
         )
+        self._answers_at_once = not inspect.iscoroutinefunction(store.hit)
 
     @property
     def scope(self) -> str:
@@ -486,11 +521,21 @@ class AsyncLimiter:
 
     async def check(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """Count one request for `id_value`. See `Limiter.check`."""
-        params = self._core.weighed(cost)
-        key = self._core.key(id_value)
-        return await self._decide(
-            "check", lambda: self._store.hit(key, params, now_ms), params.window_ms
-        )
+        core = self._core
+        params = core.weighed(cost)
+        key = core.key(id_value)
+        if not self._answers_at_once:
+            return await self._decide(
+                "check", lambda: self._store.hit(key, params, now_ms), params.window_ms
+            )
+        # What `_decide` does for a store that answers at once, without the calls in between.
+        try:
+            hit = self._store.hit(key, params, now_ms)
+            if type(hit) is not RawHit:
+                hit = await self._call(lambda: hit)
+        except Exception as error:
+            return core.from_failure(error, "check")
+        return core.from_hit(hit, "check", params.window_ms)
 
     async def peek(self, id_value: str, *, now_ms: int | None = None, cost: int = 1) -> Decision:
         """The decision `check` would give now, without counting. See `Limiter.peek`."""

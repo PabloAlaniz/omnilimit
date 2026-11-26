@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 Tier = Literal["exact", "local", "approximate"]
 Reason = Literal["ok", "limited", "store_error"]
@@ -78,8 +78,14 @@ class AsyncStore(Protocol):
     async def hit(self, key: str, params: HitParams, now_ms: int | None = None) -> RawHit: ...
 
 
+class _Deferred:
+    """A slot beside the fields of `Decision`, for what its headers will be built from."""
+
+    __slots__ = ("_deferred",)
+
+
 @dataclass(frozen=True, slots=True)
-class Decision:
+class Decision(_Deferred):
     """The outcome of one check. `status` is what to answer with when denied.
 
     `shadowed` is `True` when a limiter in shadow mode let the request through although it would
@@ -96,6 +102,93 @@ class Decision:
     tier: Tier
     headers: dict[str, str] = field(default_factory=dict)
     shadowed: bool = False
+
+    # Hidden from type checkers, which would otherwise accept any attribute on a decision.
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            # Python only comes here for a slot that holds nothing, and a limiter leaves just
+            # `headers` empty: most checks never read them, so the first read builds them. They
+            # depend on nothing but the decision, so the caller cannot tell when that happened.
+            if name != "headers":
+                raise AttributeError(
+                    f"{type(self).__name__!r} object has no attribute {name!r}",
+                    name=name,
+                    obj=self,
+                )
+            try:
+                source, profile, effective_ms = _deferred_of(self)
+            except AttributeError:
+                built = {}
+            else:
+                built = source.profile_headers(profile, self, effective_ms)
+            _set(self, "headers", built)
+            return built
+
+
+_set = object.__setattr__
+_new = object.__new__
+_deferred_of = _Deferred._deferred.__get__  # type: ignore[attr-defined]
+
+
+class _Unset:
+    """The type of `_UNSET`: no headers given, which is not the same as `None` given."""
+
+
+_UNSET = _Unset()
+
+
+class _Draft(_Deferred):
+    """A `Decision` that is still being written: the same slots, without the frozen writes."""
+
+    __slots__ = Decision.__slots__
+
+    allowed: bool
+    reason: Reason
+    status: Literal[429, 503] | None
+    remaining: int | None
+    reset_ms: int | None
+    retry_after_ms: int | None
+    tier: Tier
+    headers: dict[str, str]
+    shadowed: bool
+
+
+def make_decision(
+    allowed: bool,
+    reason: Reason,
+    status: Literal[429, 503] | None,
+    remaining: int | None,
+    reset_ms: int | None,
+    retry_after_ms: int | None,
+    tier: Tier,
+    headers: dict[str, str] | _Unset = _UNSET,
+) -> Decision:
+    """What `Decision(...)` builds, for the limiter, which builds one per check.
+
+    The `__init__` of a frozen dataclass pays an `object.__setattr__` per field. This writes the
+    same slots on a class that is not frozen and then turns the object into a `Decision`, which
+    Python allows between classes of one layout. Without `headers` they stay unset: empty, unless
+    `defer_headers` says how to build them.
+    """
+    draft = _new(_Draft)
+    draft.allowed = allowed
+    draft.reason = reason
+    draft.status = status
+    draft.remaining = remaining
+    draft.reset_ms = reset_ms
+    draft.retry_after_ms = retry_after_ms
+    draft.tier = tier
+    draft.shadowed = False
+    if headers is not _UNSET:
+        draft.headers = cast("dict[str, str]", headers)
+    draft.__class__ = Decision  # type: ignore[assignment]
+    return cast(Decision, draft)
+
+
+# `defer_headers(decision, (source, profile, effective_ms))` has `decision.headers` be
+# `source.profile_headers(profile, decision, effective_ms)`, built on its first read.
+defer_headers: Callable[[Decision, tuple[Any, Any, int]], None] = _Deferred._deferred.__set__  # type: ignore[attr-defined]
 
 
 class Reservation:

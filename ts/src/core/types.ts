@@ -119,7 +119,10 @@ export interface LimiterOptions extends Policy {
    * usually wants `closed`, a public read route usually wants `open`.
    */
   onStoreError: 'open' | 'closed';
-  /** Milliseconds before a store call counts as failed. Defaults to the store's own default, or 1000. */
+  /**
+   * Milliseconds before a store call counts as failed. Defaults to the store's own default, or
+   * 1000. A `local` store has nothing to wait for, and is timed only when this is given.
+   */
   storeTimeoutMs?: number;
   /** Response headers. Defaults to `draft-11`. `Retry-After` is always sent when denied. */
   headers?: HeaderProfile | ((input: HeaderInput) => Record<string, string>);
