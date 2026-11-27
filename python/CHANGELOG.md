@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/PabloAlaniz/omnilimit/compare/py-v0.5.0...py-v0.6.0) (2026-11-25)
+
+
+### Features
+
+* the Forwarded header, problem details responses and explainClientIp ([#41](https://github.com/PabloAlaniz/omnilimit/issues/41)) ([584e20c](https://github.com/PabloAlaniz/omnilimit/commit/584e20cdd00fcae503a9b87c6c8a385eb706e46e))
+
+
+### Bug Fixes
+
+* trim only spaces and tabs around a forwarded address, and verify beyond the vectors ([#35](https://github.com/PabloAlaniz/omnilimit/issues/35)) ([e28fb1a](https://github.com/PabloAlaniz/omnilimit/commit/e28fb1a519993741f19e7c1d03d2a0374a6aea8a))
+
 ## [0.5.0](https://github.com/PabloAlaniz/omnilimit/compare/py-v0.4.0...py-v0.5.0) (2026-11-21)
 
 
