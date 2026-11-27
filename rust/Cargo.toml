@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["kernel"]
+# The benchmark harness has its own lock file: it pins every other limiter it measures.
+exclude = ["matrix"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

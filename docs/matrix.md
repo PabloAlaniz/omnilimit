@@ -18,6 +18,9 @@ CI runs these on every pull request, and the `ci-ok` check requires all of them.
 | Python 3.13 | Valkey 8 (redis-py, valkey-py), sync and async | ✓ | ✓ | | | | ✓ |
 | Python 3.13 | Redis 7 as a cluster (redis-py), sync and async | ✓ | ✓ | | | | ✓ |
 | Python 3.13 | Postgres 15, 17 (psycopg 3), sync and async | ✓ | ✓ | | | | ✓ |
+| Rust, x86 and ARM | The [kernel](kernel.md) | Hits and peeks | Burst only | | Policy, shorthand, cost | | |
+
+The kernel is one piece, not a port: it has no reset or refund, so it follows a `sequence` vector up to the first of those, or the first step back of the clock.
 
 TypeScript and Python also take turns on one counter in real Redis and Postgres, using sequence vectors. That proves they derive the same key and read each other's state.
 

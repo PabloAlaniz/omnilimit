@@ -5,6 +5,7 @@ nav:
   - Adapters: adapters.md
   - Recipes: recipes.md
   - Stores: stores.md
+  - The kernel: kernel.md
   - Client IP: client-ip.md
   - Conformance matrix: matrix.md
   - Benchmarks: benchmarks.md
