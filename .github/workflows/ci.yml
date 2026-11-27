@@ -300,10 +300,43 @@ jobs:
         working-directory: python
       - run: python3 tools/run_mutants_py.py
 
+  rust:
+    name: rust kernel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The scan is NEON on ARM and scalar elsewhere: both run.
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: unit tests, properties and the spec's vectors
+        run: cargo test --release
+      - name: every interleaving of two threads
+        run: cargo test --release --test loom
+        env:
+          RUSTFLAGS: --cfg loom
+          LOOM_MAX_PREEMPTIONS: "3"
+      # The library's own tests: that is where the unsafe code is, and parsing the vectors takes the interpreter minutes.
+      - name: undefined behaviour
+        if: matrix.os == 'ubuntu-latest'
+        run: rustup toolchain install nightly --profile minimal --component miri && cargo +nightly miri test --lib
+        env:
+          # The property tests look for their saved cases next to the crate.
+          MIRIFLAGS: -Zmiri-disable-isolation
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [spec, pinned, core, stores, workerd, package, mutants, fuzz, bench, python-core, python-stores, python-package, python-mutants]
+    needs: [spec, pinned, core, stores, workerd, package, mutants, fuzz, bench, python-core, python-stores, python-package, python-mutants, rust]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

@@ -13,3 +13,5 @@ site/
 .coverage
 .coverage.*
 .fuzz/
+target/
+proptest-regressions/
