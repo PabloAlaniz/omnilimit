@@ -19,8 +19,26 @@ def _utf8(text: str) -> bytes:
         return repaired.encode("utf-8")
 
 
+def key_prefix(scope: str, policy: ResolvedPolicy) -> str:
+    """The part of a bucket key that a limiter never changes: everything before the hash."""
+    shape = f"{policy.limit}-{policy.window_ms}-{policy.burst}"
+    return f"ol:{_STATE_FORMAT}:{scope}:{shape}:"
+
+
+def salt_prefix(salt: str) -> bytes:
+    """What is hashed before the id."""
+    return _utf8(salt) + b"\x00"
+
+
+def bucket_key(prefix: str, salted: bytes, id_value: str) -> str:
+    """`derive_key`, from a `key_prefix` and a `salt_prefix` computed once."""
+    try:
+        encoded = id_value.encode()
+    except UnicodeEncodeError:
+        encoded = _utf8(id_value)
+    return prefix + hashlib.sha256(salted + encoded).hexdigest()[:_HASH_HEX_LENGTH]
+
+
 def derive_key(scope: str, policy: ResolvedPolicy, salt: str, id_value: str) -> str:
     """Build the bucket key. The policy is part of it, since levels are measured in windows."""
-    digest = hashlib.sha256(_utf8(salt) + b"\x00" + _utf8(id_value)).hexdigest()
-    shape = f"{policy.limit}-{policy.window_ms}-{policy.burst}"
-    return f"ol:{_STATE_FORMAT}:{scope}:{shape}:{digest[:_HASH_HEX_LENGTH]}"
+    return bucket_key(key_prefix(scope, policy), salt_prefix(salt), id_value)

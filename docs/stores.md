@@ -113,7 +113,7 @@ import { memoryStore } from 'omnilimit';
 const store = memoryStore({ maxKeys: 100_000 });
 ```
 
-It works within one process. Several instances each keep their own count, and serverless platforms may start from zero often. At `maxKeys`, expired buckets go first, then those with the oldest writes, so an attacker rotating ids can push out other buckets.
+It works within one process. Several instances each keep their own count, and serverless platforms may start from zero often. At `maxKeys`, expired buckets go first, then the least recently hit. A denied request counts as a hit for this, although it writes nothing: a client that keeps being denied stays in the store, so a flood of new ids cannot give it a fresh burst. An attacker rotating ids can still push out the buckets of clients that have gone quiet.
 
 In tests, pass `now` to move time yourself instead of faking timers: `memoryStore({ now: () => clock })` (`MemoryStore(now=...)` in Python).
 

@@ -86,6 +86,48 @@ describe('store timeout', () => {
     const limiter = createLimiter({ ...base, store: slow(60, 500), storeTimeoutMs: 10 });
     expect((await limiter.check('a')).status).toBe(503);
   });
+
+  it('sets no timer for a store in memory, which has nothing to wait for', async () => {
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const memory = createLimiter({ ...base, limit: 5, store: memoryStore() });
+      await memory.check('a');
+      await memory.peek('a');
+      const { reservation } = await memory.reserve('a');
+      await memory.refund(reservation);
+      await memory.reset('a');
+      expect(timers).not.toHaveBeenCalled();
+      // Any other tier is timed on every call.
+      const remote = memoryStore();
+      await createLimiter({ ...base, store: { tier: 'exact', hit: remote.hit } }).check('a');
+      expect(timers).toHaveBeenCalledTimes(1);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it('still times a local store when the caller or the store names a timeout', async () => {
+    const hangs = (defaultTimeoutMs?: number): Store => ({
+      tier: 'local',
+      ...(defaultTimeoutMs === undefined ? {} : { defaultTimeoutMs }),
+      hit: () => new Promise(() => {}),
+    });
+    expect((await createLimiter({ ...base, store: hangs(), storeTimeoutMs: 10 }).check('a')).status).toBe(503);
+    expect((await createLimiter({ ...base, store: hangs(10) }).check('a')).status).toBe(503);
+  });
+
+  it('reports a local store that throws, timed or not', async () => {
+    const store: Store = {
+      tier: 'local',
+      hit: () => {
+        throw new Error('broken');
+      },
+    };
+    const events: string[] = [];
+    const limiter = createLimiter({ ...base, store, onEvent: (e) => events.push(e.type) });
+    expect(await limiter.check('a')).toMatchObject({ allowed: false, reason: 'store_error', status: 503 });
+    expect(events).toEqual(['store_error']);
+  });
 });
 
 describe('peek and reset', () => {
@@ -336,16 +378,154 @@ describe('memoryStore', () => {
     expect(() => memoryStore({ maxKeys: 0 })).toThrow(RangeError);
   });
 
-  it('caps buckets, evicting expired ones and then the oldest', async () => {
+  it('caps buckets, evicting expired ones and then the least recently hit', async () => {
     const store = memoryStore({ maxKeys: 2 });
     const params = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
     await store.hit('expired', params, 0);
     await store.hit('old', params, 5000);
     await store.hit('new', params, 5001); // evicts `expired`
-    expect((await store.hit('old', params, 5002)).allowed).toBe(false);
-    await store.hit('newer', params, 5003); // nothing expired: evicts the oldest write, `old`
-    expect((await store.hit('new', params, 5004)).allowed).toBe(false);
-    expect((await store.hit('old', params, 5005)).allowed).toBe(true);
+    expect((await store.hit('old', params, 5002)).allowed).toBe(false); // denied, and still a hit
+    await store.hit('newer', params, 5003); // nothing expired: evicts the least recently hit, `new`
+    expect((await store.hit('old', params, 5004)).allowed).toBe(false);
+    expect((await store.hit('new', params, 5005)).allowed).toBe(true);
+  });
+
+  it('keeps a bucket that is being denied, and writes nothing to it', async () => {
+    const store = memoryStore({ maxKeys: 2 });
+    const params = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
+    await store.hit('a', params, 1000);
+    await store.hit('b', params, 1000);
+    const before = await store.peek!('a', params, 1400);
+    expect(await store.hit('a', params, 1400)).toEqual({ allowed: false, level: 600, ts: 1000 });
+    // The meter is where it was: the denial neither counted nor moved the timestamp.
+    expect(await store.peek!('a', params, 1400)).toEqual(before);
+    await store.hit('c', params, 1400); // evicts `b`: `a` was hit since
+    expect((await store.peek!('a', params, 1400)).level).toBe(600);
+    expect((await store.peek!('b', params, 1400)).level).toBe(0);
+    // Nor did it push the expiry back: a full drain after its one counted hit, `a` is free.
+    expect(await store.hit('a', params, 2000)).toEqual({ allowed: true, level: 1000, ts: 2000 });
+  });
+
+  it('still evicts first a denied bucket that has expired since', async () => {
+    const store = memoryStore({ maxKeys: 3 });
+    const one = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
+    const brief = { limit: 1000, windowMs: 1000, capacity: 1000, drainMs: 1 };
+    await store.hit('a', brief, 1000);
+    await store.hit('b', one, 1000);
+    await store.hit('c', one, 1000);
+    // Denied at the same instant, so `a` is the most recent bucket, and it expires at 1001.
+    expect((await store.hit('a', brief, 1000)).allowed).toBe(false);
+    await store.hit('d', one, 1500);
+    for (const key of ['b', 'c', 'd']) expect((await store.peek!(key, one, 1500)).level).toBeGreaterThan(0);
+  });
+
+  it('does not reopen the limit of a client being denied while new keys flood the store', async () => {
+    // One client at 10 times its limit for 3 windows, while never-seen keys arrive at 12.5 times
+    // the cap per window. It gets what it gets with no flood: its burst, then the refill.
+    for (const flood of [0, 250]) {
+      const [limit, windowMs, cap] = [5, 60_000, 1000];
+      const store = memoryStore({ maxKeys: cap });
+      const params = { limit, windowMs, capacity: limit * windowMs, drainMs: windowMs };
+      const gap = windowMs / (10 * limit);
+      const start = 1_800_000_000_000;
+      let admitted = 0;
+      let others = 0;
+      for (let index = 0; index < 3 * 10 * limit; index += 1) {
+        if ((await store.hit('abuser', params, start + index * gap)).allowed) admitted += 1;
+        for (let extra = 0; extra < flood; extra += 1) {
+          expect((await store.hit(`flood:${others}`, params, start + index * gap + 1 + extra * 4)).allowed).toBe(true);
+          others += 1;
+        }
+      }
+      // 5 of burst, then one every 12 s for the 178.8 s that follow: 5 + 14.
+      expect(admitted).toBe(19);
+    }
+  });
+
+  it('evicts in the order of the last hit, one bucket for each new one', async () => {
+    const store = memoryStore({ maxKeys: 3 });
+    const params = { limit: 1, windowMs: 1000, capacity: 2000, drainMs: 2000 };
+    const held = async (keys: string[], nowMs: number) => {
+      const present: string[] = [];
+      for (const key of keys) if (((await store.peek!(key, params, nowMs)).level ?? 0) > 0) present.push(key);
+      return present;
+    };
+    await store.hit('a', params, 5000);
+    await store.hit('b', params, 5001);
+    await store.hit('c', params, 5002);
+    await store.hit('a', params, 5003); // counted: `a` is now the newest write, `b` the oldest
+    await store.hit('d', params, 5004); // evicts `b`
+    expect(await held(['a', 'b', 'c', 'd'], 5004)).toEqual(['a', 'c', 'd']);
+    await store.reset!('c'); // leaves room for one
+    await store.hit('e', params, 5005);
+    expect(await held(['a', 'c', 'd', 'e'], 5005)).toEqual(['a', 'd', 'e']);
+    await store.hit('f', params, 5006); // evicts `a`, written at 5003
+    await store.hit('g', params, 5007); // evicts `d`
+    expect(await held(['a', 'd', 'e', 'f', 'g'], 5007)).toEqual(['e', 'f', 'g']);
+  });
+
+  it('evicts an expired bucket before an older one that is still live, across policies', async () => {
+    const store = memoryStore({ maxKeys: 3 });
+    const long = { limit: 1, windowMs: 60_000, capacity: 60_000, drainMs: 60_000 };
+    const short = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
+    await store.hit('long', long, 5000);
+    await store.hit('short-1', short, 5001);
+    await store.hit('short-2', short, 5002);
+    // `short-1` expired at 6001: it goes, not the older `long`. A bucket that is gone reports the
+    // time of the peek, one that is held the time of its write.
+    await store.hit('short-3', short, 6001);
+    expect((await store.peek!('long', long, 6001)).ts).toBe(5000);
+    expect((await store.peek!('short-1', short, 6001)).ts).toBe(6001);
+    expect((await store.peek!('short-2', short, 6001)).ts).toBe(5002);
+    await store.hit('short-4', short, 6001); // nothing has expired: the oldest write goes, `long`
+    expect((await store.peek!('long', long, 6001)).ts).toBe(6001);
+    expect((await store.peek!('short-2', short, 6001)).ts).toBe(5002);
+    // A policy whose buckets are all gone is not in the way of the next eviction.
+    await store.hit('long', long, 6001); // evicts `short-2`
+    await store.reset!('long');
+    await store.hit('short-5', short, 6001);
+    await store.hit('short-6', short, 6001); // evicts `short-3`
+    expect((await store.peek!('short-3', short, 6001)).level).toBe(0);
+    expect((await store.peek!('short-4', short, 6001)).level).toBe(1000);
+  });
+
+  it('does the same work for a new key on a full store, whatever the cap', async () => {
+    // Counted, not timed: every call into a Map, and every step of an iteration over one.
+    const mapWork = (run: () => void): number => {
+      const iterator = Object.getPrototypeOf(new Map()[Symbol.iterator]()) as { next: () => unknown };
+      const proto = Map.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
+      const originals = { get: proto.get!, set: proto.set!, delete: proto.delete!, has: proto.has!, next: iterator.next };
+      let calls = 0;
+      const counting = (original: (...args: unknown[]) => unknown) =>
+        function (this: unknown, ...args: unknown[]) {
+          calls += 1;
+          return original.apply(this, args);
+        };
+      try {
+        for (const name of ['get', 'set', 'delete', 'has'] as const) proto[name] = counting(originals[name]);
+        iterator.next = counting(originals.next);
+        run();
+      } finally {
+        Object.assign(proto, { get: originals.get, set: originals.set, delete: originals.delete, has: originals.has });
+        iterator.next = originals.next;
+      }
+      return calls;
+    };
+    const params = { limit: 1, windowMs: 1000, capacity: 1000, drainMs: 1000 };
+    const workWhenFull = async (maxKeys: number) => {
+      const store = memoryStore({ maxKeys });
+      for (let i = 0; i < maxKeys; i++) await store.hit(`k${i}`, params, 5000);
+      // The store does all its work before its promise is returned.
+      const works = [mapWork(() => void store.hit('new-1', params, 5001)), mapWork(() => void store.hit('new-2', params, 5001))];
+      // A bucket that is gone reports the time of the peek, one that is held the time of its write.
+      expect((await store.peek!('k0', params, 5001)).ts).toBe(5001);
+      expect((await store.peek!('k1', params, 5001)).ts).toBe(5001);
+      expect((await store.peek!('k2', params, 5001)).ts).toBe(5000);
+      return works;
+    };
+    const small = await workWhenFull(10);
+    expect(await workWhenFull(20_000)).toEqual(small);
+    expect(Math.max(...small)).toBeLessThanOrEqual(8);
   });
 
   it('follows fake timers installed after the store was created', async () => {
