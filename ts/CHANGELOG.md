@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.6.0...ts-v0.6.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* a denied client keeps its bucket under a key flood, and a full memory store no longer scans ([#44](https://github.com/PabloAlaniz/omnilimit/issues/44)) ([7b2b903](https://github.com/PabloAlaniz/omnilimit/commit/7b2b9036d57dde68c6c5b6e633e85abec78780f2))
+
 ## [0.6.0](https://github.com/PabloAlaniz/omnilimit/compare/ts-v0.5.0...ts-v0.6.0) (2026-11-25)
 
 
