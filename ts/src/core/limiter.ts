@@ -1,6 +1,6 @@
 import { assertCost, assertScope, resolvePolicy, viewOf } from './gcra.js';
 import { buildHeaders } from './headers.js';
-import { deriveKey } from './key.js';
+import { keyDeriver } from './key.js';
 import type {
   Decision,
   HeaderInput,
@@ -67,6 +67,12 @@ export function createLimiter(options: LimiterOptions): Limiter {
     throw new TypeError("omnilimit: onStoreError is required and must be 'open' or 'closed'");
   }
   if (typeof shadow !== 'boolean') throw new TypeError('omnilimit: shadow must be a boolean');
+  const keyOf = keyDeriver(scope, policy, salt);
+
+  // A local store does no I/O, so it has nothing to wait for: its calls are not raced against a
+  // timer, unless the caller or the store names a timeout.
+  const timed = store.tier !== 'local' || options.storeTimeoutMs !== undefined || store.defaultTimeoutMs !== undefined;
+  const within = <T>(work: Promise<T>): Promise<T> => (timed ? withTimeout(work, storeTimeoutMs) : work);
 
   const emit = (event: LimiterEvent): void => {
     try {
@@ -80,8 +86,12 @@ export function createLimiter(options: LimiterOptions): Limiter {
     // A client must not see, and adapt to, a limit that is not enforced.
     if (shadow) return { ...decision, headers: {} };
     const input: HeaderInput = { scope, limit: policy.limit, windowMs: policy.windowMs, decision, effectiveMs };
-    const built = typeof headers === 'function' ? headers(input) : buildHeaders(headers, input);
-    return { ...decision, headers: built };
+    // A function of the caller gets a decision that stays as it was given. Ours do not keep theirs,
+    // so the headers go on the decision itself.
+    if (typeof headers === 'function') return { ...decision, headers: headers(input) };
+    const built = decision as Decision;
+    built.headers = buildHeaders(headers, input);
+    return built;
   };
 
   const fromHit = (hit: RawHit, amount: number): Decision => {
@@ -133,6 +143,23 @@ export function createLimiter(options: LimiterOptions): Limiter {
     shadow && !decision.allowed ? { ...decision, allowed: true, status: null, shadowed: true } : decision;
   const marked = (decision: Decision): { shadowed?: true } => (decision.shadowed ? { shadowed: true } : {});
 
+  /** The decision for what the store answered, and its event. */
+  const answered = (op: 'check' | 'peek', amount: number, hit: RawHit): Decision => {
+    const decision = shadowed(fromHit(hit, amount));
+    if (onEvent) {
+      if (hit.allowed) emit({ type: 'allowed', op, scope, tier: store.tier });
+      else emit({ type: 'limited', op, scope, tier: store.tier, ...marked(decision) });
+    }
+    return decision;
+  };
+
+  /** The decision for a store that failed or timed out, and its event. */
+  const failed = (op: 'check' | 'peek', error: unknown): Decision => {
+    const decision = shadowed(fromFailure());
+    if (onEvent) emit({ type: 'store_error', op, scope, tier: store.tier, error, ...marked(decision) });
+    return decision;
+  };
+
   /** The decision, and the store's answer when there was one (`null` after a store failure). */
   const decideRaw = async (
     op: 'check' | 'peek',
@@ -141,16 +168,11 @@ export function createLimiter(options: LimiterOptions): Limiter {
   ): Promise<{ decision: Decision; hit: RawHit | null }> => {
     let hit: RawHit;
     try {
-      hit = await withTimeout(run(), storeTimeoutMs);
+      hit = await within(run());
     } catch (error) {
-      const decision = shadowed(fromFailure());
-      emit({ type: 'store_error', op, scope, tier: store.tier, error, ...marked(decision) });
-      return { decision, hit: null };
+      return { decision: failed(op, error), hit: null };
     }
-    const decision = shadowed(fromHit(hit, amount));
-    if (hit.allowed) emit({ type: 'allowed', op, scope, tier: store.tier });
-    else emit({ type: 'limited', op, scope, tier: store.tier, ...marked(decision) });
-    return { decision, hit };
+    return { decision: answered(op, amount, hit), hit };
   };
 
   const decide = async (op: 'check' | 'peek', amount: number, run: () => Promise<RawHit>): Promise<Decision> =>
@@ -180,33 +202,44 @@ export function createLimiter(options: LimiterOptions): Limiter {
     tier: store.tier,
     async check(id, checkOptions) {
       const params = weighed(checkOptions?.cost);
-      const key = await deriveKey(scope, policy, salt, id);
-      return decide('check', params.windowMs, () => store.hit(key, params, checkOptions?.nowMs));
+      const derived = keyOf(id);
+      const key = typeof derived === 'string' ? derived : await derived;
+      // The path every request takes, so written out: one promise of the limiter around the store's.
+      let hit: RawHit;
+      try {
+        hit = await within(store.hit(key, params, checkOptions?.nowMs));
+      } catch (error) {
+        return failed('check', error);
+      }
+      return answered('check', params.windowMs, hit);
     },
     async peek(id, peekOptions) {
       const peekFn = store.peek?.bind(store);
       if (!peekFn) throw unsupported('peek');
       const params = weighed(peekOptions?.cost);
-      const key = await deriveKey(scope, policy, salt, id);
+      const derived = keyOf(id);
+      const key = typeof derived === 'string' ? derived : await derived;
       return decide('peek', params.windowMs, () => peekFn(key, params, peekOptions?.nowMs));
     },
     async reset(id) {
       const resetFn = store.reset?.bind(store);
       if (!resetFn) throw unsupported('reset');
-      const key = await deriveKey(scope, policy, salt, id);
+      const derived = keyOf(id);
+      const key = typeof derived === 'string' ? derived : await derived;
       try {
-        await withTimeout(resetFn(key), storeTimeoutMs);
+        await within(resetFn(key));
       } catch (error) {
         emit({ type: 'store_error', op: 'reset', scope, tier: store.tier, error });
         return false;
       }
-      emit({ type: 'reset', op: 'reset', scope, tier: store.tier });
+      if (onEvent) emit({ type: 'reset', op: 'reset', scope, tier: store.tier });
       return true;
     },
     async reserve(id, reserveOptions) {
       if (!store.refund) throw unsupported('refund');
       const params = weighed(reserveOptions?.cost);
-      const key = await deriveKey(scope, policy, salt, id);
+      const derived = keyOf(id);
+      const key = typeof derived === 'string' ? derived : await derived;
       const { decision, hit } = await decideRaw('check', params.windowMs, () => store.hit(key, params, reserveOptions?.nowMs));
       // Only what the store counted can be given back: not a denial, shadowed or not, and not an
       // `open` failure.
@@ -224,13 +257,13 @@ export function createLimiter(options: LimiterOptions): Limiter {
       state.spent = true;
       const refundFn = store.refund as NonNullable<Store['refund']>;
       try {
-        await withTimeout(refundFn.call(store, state.key, state.params, state.sinceMs, refundOptions?.nowMs), storeTimeoutMs);
+        await within(refundFn.call(store, state.key, state.params, state.sinceMs, refundOptions?.nowMs));
       } catch (error) {
         // No retry: a refund that timed out may have been applied, and must not be applied twice.
         emit({ type: 'store_error', op: 'refund', scope, tier: store.tier, error });
         return false;
       }
-      emit({ type: 'refund', op: 'refund', scope, tier: store.tier });
+      if (onEvent) emit({ type: 'refund', op: 'refund', scope, tier: store.tier });
       return true;
     },
   };

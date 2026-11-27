@@ -86,7 +86,9 @@ def parse_policy(text: str) -> PolicyArgs:
     return PolicyArgs(limit=limit, window_ms=window_ms)
 
 
-@dataclass(frozen=True, slots=True)
+# Not frozen, unlike the public types: one is built per counted hit, and a frozen dataclass pays an
+# `object.__setattr__` per field. Nothing changes a state once it is built.
+@dataclass(slots=True)
 class MeterState:
     level: int
     ts: int
@@ -141,12 +143,9 @@ def apply_refund(
     return RawRefund(level=level, ts=t), MeterState(level=level, ts=t)
 
 
-@dataclass(frozen=True, slots=True)
-class MeterView:
-    remaining: int
-    reset_ms: int
-    retry_after_ms: int | None
-    effective_ms: int
+# `remaining`, `reset_ms`, `retry_after_ms` and `effective_ms`, in that order. A plain tuple: one is
+# built per decision.
+MeterView = tuple[int, int, int | None, int]
 
 
 def view_of(allowed: bool, level: int, params: HitParams, amount: int | None = None) -> MeterView:
@@ -159,9 +158,11 @@ def view_of(allowed: bool, level: int, params: HitParams, amount: int | None = N
     if not allowed:
         added = params.window_ms if amount is None else amount
         retry_after_ms = ceil_div(max(0, level + added - params.capacity), params.limit)
-        return MeterView(remaining, reset_ms, retry_after_ms, retry_after_ms)
+        return remaining, reset_ms, retry_after_ms, retry_after_ms
+    if remaining != 0:
+        return remaining, reset_ms, None, reset_ms
     next_unit_ms = ceil_div(max(0, level + params.window_ms - params.capacity), params.limit)
-    return MeterView(remaining, reset_ms, None, next_unit_ms if remaining == 0 else reset_ms)
+    return remaining, reset_ms, None, next_unit_ms
 
 
 def assert_cost(cost: object, policy: ResolvedPolicy) -> None:

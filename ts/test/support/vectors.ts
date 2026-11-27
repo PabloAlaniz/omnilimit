@@ -233,7 +233,7 @@ export async function runRecipe(vector: Vector, store: Store, saltSuffix = ''): 
       config.tier === 'approximate'
         ? cloudflareBindingStore({ binding: { limit: async () => ({ success: true }) }, periodSec: 60 })
         : store;
-    const key = (id: string) => deriveKey(config.scope, policy, salt, id);
+    const key = async (id: string) => deriveKey(config.scope, policy, salt, id);
     const idOf = new Map<string, string>();
     for (const id of ids) idOf.set(await key(id), id);
     const call = <T>(op: Call['op'], k: string, run: () => Promise<T>): Promise<T> => {
